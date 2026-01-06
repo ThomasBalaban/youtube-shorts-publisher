@@ -1,7 +1,7 @@
 import os
 from playwright.sync_api import sync_playwright
-# Import your new function
 from config.navigation import navigate_to_shorts
+from config.scraper import VideoScraper
 
 def run():
     user_data_dir = os.path.join(os.getcwd(), "user_data")
@@ -21,17 +21,24 @@ def run():
         print("Navigating to YouTube Studio...")
         page.goto("https://studio.youtube.com/")
         
-        # Wait for the dashboard to load initially
-        try:
-            page.wait_for_selector("ytcp-navigation-drawer", timeout=30000)
-        except:
-            print("Dashboard didn't load. You might need to log in.")
+        # 1. Navigate to Shorts
+        if navigate_to_shorts(page):
+            
+            # 2. Start Scraping
+            print("\n--- Starting Draft Scraper ---")
+            scraper = VideoScraper(page)
+            draft_titles = scraper.find_drafts()
+            
+            print(f"\nTotal Drafts Collected: {len(draft_titles)}")
+            if len(draft_titles) > 0:
+                print("Draft Titles:", draft_titles)
+            else:
+                print("No draft titles collected.")
+            
+        else:
+            print("Could not navigate to Shorts. Aborting scrape.")
 
-        # --- CALL THE NAVIGATION FUNCTION ---
-        navigate_to_shorts(page)
-
-        print("\nBrowser is open. Ctrl+C in terminal to stop.")
-        
+        print("\nProcess finished. Ctrl+C to close.")
         try:
             while True:
                 page.wait_for_timeout(1000)
