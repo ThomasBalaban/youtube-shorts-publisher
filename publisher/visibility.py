@@ -1,71 +1,126 @@
 from playwright.sync_api import Page
 import time
+import re
+from datetime import datetime
 from utils.schedule_manager import get_next_schedule_time
 
 def handle_visibility(page: Page):
     print("\n--- Step 7: Visibility (Scheduling) ---")
     
     # 1. Calculate Time
-    target_date, target_time = get_next_schedule_time()
-    if not target_date:
+    target_date_str, target_time_str = get_next_schedule_time()
+    if not target_date_str:
         return False
 
-    print(f">> Target: {target_date} @ {target_time}")
+    print(f">> Target: {target_date_str} @ {target_time_str}")
 
     try:
-        # 2. Click 'Schedule' Radio
-        # This reveals the container with ID 'second-container'
-        schedule_radio = page.locator("tp-yt-paper-radio-button[name='SCHEDULE']")
-        schedule_radio.scroll_into_view_if_needed()
-        time.sleep(1)
-        schedule_radio.click()
-        
-        # Wait for the picker container to appear
-        # Selector based on your snippet: .date-timezone-container inside #second-container
-        page.wait_for_selector(".date-timezone-container", state="visible", timeout=5000)
-        time.sleep(1)
+        target_dt = datetime.strptime(target_date_str, "%b %d, %Y")
+        target_month_year = target_dt.strftime("%b %Y") 
+        target_day = str(target_dt.day)                 
+    except ValueError as e:
+        print(f"Error parsing target date: {e}")
+        return False
 
-        # 3. Handle DATE
-        print(">> Setting Date...")
-        # The input is inside ytcp-date-picker -> tp-yt-paper-input -> input
-        # We verify visibility of the date-picker component first
-        date_picker = page.locator("ytcp-date-picker").first
-        date_input = date_picker.locator("input").first
+    try:
+        # 2. Click 'Schedule' Container
+        print(">> Clicking 'Schedule' container...")
+        schedule_container = page.locator("#second-container")
+        schedule_container.scroll_into_view_if_needed()
+        time.sleep(1)
+        schedule_container.click()
         
-        date_input.click()
-        time.sleep(0.5)
-        date_input.fill(target_date)
-        page.keyboard.press("Enter")
-        time.sleep(1) # Wait for calendar to close/validate
+        print(">> Waiting for visibility options...")
+        page.wait_for_selector("ytcp-video-visibility-select", state="visible", timeout=10000)
+        
+        # Scoped locator for the triggers
+        # We define them here to ensure the section is loaded
+        datepicker_trigger = page.locator(".date-timezone-container #datepicker-trigger").first
+        
+        # --- NEW: Time Container Selector ---
+        # Using the specific ID you found
+        time_container_trigger = page.locator("#time-of-day-container").first
+        
+        datepicker_trigger.wait_for(state="visible", timeout=10000)
+        time.sleep(1) 
 
-        # 4. Handle TIME
-        print(">> Setting Time...")
-        # The time input is inside ytcp-time-of-day-picker -> tp-yt-paper-input -> input
-        # Note: The dropdown listbox is separate, but typing usually works if valid.
+        # 3. Open Calendar (Date Logic - CONFIRMED WORKING)
+        print(">> Opening Calendar...")
+        datepicker_trigger.click()
         
-        time_picker = page.locator("ytcp-time-of-day-picker").first
-        time_input = time_picker.locator("input").first
-        
-        time_input.click()
+        calendar_dialog = page.locator("ytcp-date-picker tp-yt-paper-dialog")
+        calendar_dialog.wait_for(state="visible", timeout=5000)
         time.sleep(0.5)
+
+        # 4. Navigate Month
+        print(f">> Navigating to month: {target_month_year}...")
+        next_month_btn = page.locator("ytcp-date-picker #next-month")
         
-        # We type the time (e.g., "6:00 PM")
-        time_input.fill(target_time)
-        time.sleep(1) # Wait for the dropdown to filter
+        month_found = False
+        for _ in range(24):
+            month_container = page.locator(f".calendar-month:has-text('{target_month_year}')")
+            if month_container.is_visible():
+                print(f"   [UI] Found month: {target_month_year}")
+                month_found = True
+                break
+            else:
+                if next_month_btn.is_visible():
+                    next_month_btn.click()
+                    time.sleep(0.2)
+                else:
+                    break
         
-        # CRITICAL: Select from the listbox to ensure format matching
-        # YouTube uses a special whitespace (\u202f) in "PM", so exact string match might fail.
-        # We look for the visible option in the listbox and click it.
+        if not month_found:
+            print(f"Error: Could not find month '{target_month_year}'")
+            return False
+
+        # 5. Select Day
+        print(f">> Selecting day: {target_day}...")
+        month_container = page.locator(f".calendar-month:has-text('{target_month_year}')")
+        day_pattern = re.compile(rf"^\s*{target_day}\s*$")
+        day_cell = month_container.locator(".calendar-day").filter(has_text=day_pattern).first
         
-        # The listbox appears in a dialog. We search for the option containing our text.
-        # We use strict=False to match "6:00 PM" even if the DOM has "6:00 PM"
-        time_option = page.locator("tp-yt-paper-item").filter(has_text=target_time).first
-        
-        if time_option.is_visible():
-            print(f"   [UI] Found list option for {target_time}. Clicking...")
-            time_option.click()
+        if day_cell.is_visible():
+            day_cell.click()
+            print("   [UI] Date clicked.")
+            time.sleep(1) 
         else:
-            print("   [UI] List option not found. Pressing Enter to confirm typed value.")
+            print(f"Error: Day '{target_day}' not found.")
+            return False
+
+        # 6. Handle TIME (Updated Logic)
+        print(">> Opening Time Picker...")
+        
+        # Click the container to open the listbox
+        time_container_trigger.click()
+        
+        # Wait for the specific time picker dialog
+        time_dialog = page.locator("ytcp-time-of-day-picker tp-yt-paper-dialog")
+        time_dialog.wait_for(state="visible", timeout=5000)
+        time.sleep(0.5)
+        
+        # Select the time from the list
+        # target_time_str is like "6:00 PM"
+        # The list items might have "6:00\u202fPM". Playwright's has_text usually matches nicely.
+        print(f">> Selecting time: {target_time_str}...")
+        
+        # We scope to the active time picker's listbox
+        time_option = page.locator("ytcp-time-of-day-picker tp-yt-paper-item").filter(has_text=target_time_str).first
+        
+        # Scroll to it just in case (the list is long)
+        if time_option.is_visible():
+             time_option.scroll_into_view_if_needed()
+             time_option.click()
+             print("   [UI] Time clicked.")
+        else:
+            # Fallback: if scroll didn't work or text mismatch, try typing into the input inside that container
+            print("   [Warning] Time option not found in list. Attempting to type...")
+            # Close the dialog by clicking the trigger again or outside? 
+            # Actually, the input inside #time-of-day-container is usually editable.
+            
+            input_box = time_container_trigger.locator("input").first
+            input_box.click()
+            input_box.fill(target_time_str)
             page.keyboard.press("Enter")
             
         time.sleep(1)

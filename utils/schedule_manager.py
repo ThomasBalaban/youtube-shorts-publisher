@@ -4,16 +4,18 @@ from datetime import datetime, timedelta, time
 
 def get_next_schedule_time():
     """
-    Calculates the next available schedule slot based on saved data.
+    Calculates the next available schedule slot.
     Slots: 12:00 PM, 6:00 PM, 9:00 PM.
+    Logic: Starts from MAX(Now, Last_Scheduled_Video).
     """
     json_path = os.path.join("saved_shorts_data", "scheduled_videos.json")
     
     # --- 1. Determine Starting Point ---
-    # Default: Start checking from "Tomorrow" at 9 AM (so the first slot found is Tomorrow 12 PM)
     now = datetime.now()
-    start_date = now + timedelta(days=1)
-    last_scheduled_dt = datetime.combine(start_date.date(), time(9, 0))
+    
+    # Default: Start searching from 'Now' if no previous data exists
+    # This allows us to catch today's 6pm/9pm slots if we are running at 4pm
+    last_scheduled_dt = now
 
     if os.path.exists(json_path):
         try:
@@ -22,13 +24,9 @@ def get_next_schedule_time():
             
             timestamps = []
             for video in data:
-                # We look for the 'iso' timestamp in the schedule object
                 if video.get("schedule") and video["schedule"].get("iso"):
                     iso_str = video["schedule"]["iso"]
-                    # Parse ISO string to datetime object (ignoring timezone for simple comparison)
-                    # ISO Format example: "2026-01-30T15:15:00-05:00"
                     try:
-                        # Taking first 19 chars gets 'YYYY-MM-DDTHH:MM:SS' which is safe for naive datetime
                         clean_iso = iso_str[:19] 
                         dt = datetime.strptime(clean_iso, "%Y-%m-%dT%H:%M:%S")
                         timestamps.append(dt)
@@ -36,22 +34,25 @@ def get_next_schedule_time():
                         continue
             
             if timestamps:
-                last_scheduled_dt = max(timestamps)
-                print(f"   [Scheduler] Last scheduled video found in file: {last_scheduled_dt}")
-            else:
-                print("   [Scheduler] No valid timestamps in JSON. Using default start.")
+                last_from_file = max(timestamps)
+                print(f"   [Scheduler] Last scheduled video in file: {last_from_file}")
+                
+                # If the last video is in the future, we continue from there.
+                # If it's in the past (e.g. yesterday), we start from 'Now' to avoid scheduling in the past.
+                if last_from_file > now:
+                    last_scheduled_dt = last_from_file
+                else:
+                    print("   [Scheduler] Last video is in the past. Starting fresh from Now.")
+                    last_scheduled_dt = now
 
         except Exception as e:
             print(f"   [Scheduler] Error reading JSON: {e}")
 
     # --- 2. Find Next Slot ---
-    # We check slots sequentially starting after the last_scheduled_dt
     current_check_dt = last_scheduled_dt
     
-    # Look ahead up to 14 days to find a slot (safe buffer)
+    # Check next 14 days
     for day_offset in range(14):
-        # We check the date of (Start Time + offset)
-        # Note: If day_offset is 0, we are checking the rest of the current 'last scheduled' day
         target_date = current_check_dt.date() + timedelta(days=day_offset)
         
         # Define the 3 slots for this target date
@@ -62,15 +63,13 @@ def get_next_schedule_time():
         ]
         
         for slot in slots:
-            if slot > current_check_dt:
-                # Found our winner
-                # Return strings formatted for YouTube input
-                # Date: "Jan 30, 2026"
-                # Time: "12:00 PM" or "6:00 PM"
+            # 1. Must be after the last scheduled video (sequence order)
+            # 2. Must be in the future relative to real-world time (validity)
+            if slot > current_check_dt and slot > now:
                 
-                # Removing leading zero from hour for cleaner typing (06:00 PM -> 6:00 PM)
-                time_str = slot.strftime("%I:%M %p").lstrip("0") 
-                date_str = slot.strftime("%b %d, %Y")
+                # Formatting
+                time_str = slot.strftime("%I:%M %p").lstrip("0") # "6:00 PM"
+                date_str = slot.strftime("%b %d, %Y")            # "Jan 08, 2026"
                 
                 print(f"   [Scheduler] Next Slot Calculated: {date_str} @ {time_str}")
                 return date_str, time_str
