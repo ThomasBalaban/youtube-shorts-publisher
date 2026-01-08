@@ -2,45 +2,42 @@ from playwright.sync_api import Page
 import time
 
 def click_save(page: Page):
-    print("\n--- Step 8: Save / Schedule ---")
-    print(">> Looking for 'Schedule' button (formerly Save)...")
+    print("\n--- Step 8: Save / Publish ---")
+    print(">> Looking for 'Save' button...")
 
     try:
-        # The button ID is usually 'done-button' for both Save and Schedule
+        # 1. Click the main Save/Schedule button
         save_btn = page.locator("#done-button")
         
         if save_btn.is_visible():
-            print(">> Clicking 'Schedule'...")
             save_btn.click()
+            print(">> 'Save' button clicked. Waiting for confirmation dialog...")
             
-            # --- HANDLE SUCCESS DIALOG ---
-            print(">> Waiting for success dialog...")
-            # We wait for the dialog that appears after saving
-            # Usually has a header like "Video scheduled"
+            # 2. Wait for the confirmation dialog to appear
+            # We look for the close button you specified to confirm the dialog is ready
+            close_button = page.locator("ytcp-video-share-dialog #close-button").click()
+            
             try:
-                page.wait_for_selector("ytcp-video-share-dialog", state="visible", timeout=15000)
-                print(">> Success dialog appeared.")
+                # Wait up to 10 seconds for the "Video scheduled/published" popup
+                close_button.wait_for(state="visible", timeout=10000)
+                print(">> Confirmation dialog detected. Clicking 'Close'...")
                 
-                # Find and click the 'Close' button to return to the list
-                # It's typically a ytcp-button with ID 'close-button'
-                close_btn = page.locator("ytcp-video-share-dialog #close-button")
+                # Click the Close button
+                close_button.click()
+                print(">> Success: Confirmation dialog closed.")
                 
-                if close_btn.is_visible():
-                    print(">> Closing success dialog...")
-                    close_btn.click()
-                    # Wait for dialog to disappear so we can interact with the main page again
-                    page.wait_for_selector("ytcp-video-share-dialog", state="hidden", timeout=5000)
-                else:
-                    print(">> Warning: Close button not found on success dialog.")
-                    
-            except:
-                print(">> Warning: Success dialog did not appear (or timed out).")
-            
-            return True
+                # Brief sleep to ensure UI transition completes
+                time.sleep(2)
+                return True
+                
+            except Exception as e:
+                print(f">> Warning: Close button not found or dialog didn't appear: {e}")
+                # We return True anyway because the Save itself likely succeeded
+                return True
         else:
-            print(">> Error: 'Schedule' button not found.")
+            print(">> Error: 'Save' button not found or not visible.")
             return False
 
     except Exception as e:
-        print(f"Error clicking 'Schedule': {e}")
+        print(f"Error clicking 'Save': {e}")
         return False

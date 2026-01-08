@@ -4,75 +4,68 @@ from datetime import datetime, timedelta, time
 
 def get_next_schedule_time():
     """
-    Calculates the next available schedule slot.
-    Slots: 12:00 PM, 6:00 PM, 9:00 PM.
-    Logic: Starts from MAX(Now, Last_Scheduled_Video).
+    Calculates the next available schedule slot (12:00 PM, 6:00 PM, 9:00 PM).
+    Logic: 
+    1. Scan all existing scheduled videos to find occupied slots.
+    2. Start from NOW and find the first future slot that is NOT occupied.
     """
     json_path = os.path.join("saved_shorts_data", "scheduled_videos.json")
+    occupied_slots = set()
     
-    # --- 1. Determine Starting Point ---
-    now = datetime.now()
-    
-    # Default: Start searching from 'Now' if no previous data exists
-    # This allows us to catch today's 6pm/9pm slots if we are running at 4pm
-    last_scheduled_dt = now
-
+    # --- 1. Load Occupied Slots ---
     if os.path.exists(json_path):
         try:
             with open(json_path, "r") as f:
                 data = json.load(f)
             
-            timestamps = []
             for video in data:
                 if video.get("schedule") and video["schedule"].get("iso"):
                     iso_str = video["schedule"]["iso"]
                     try:
-                        clean_iso = iso_str[:19] 
-                        dt = datetime.strptime(clean_iso, "%Y-%m-%dT%H:%M:%S")
-                        timestamps.append(dt)
+                        # Parse ISO string (e.g., 2026-01-08T18:00:00-05:00)
+                        # We only care about the matching datetime, so we strip timezone for easy comparison
+                        # (Assuming the bot runs in the same timezone as the intended schedule)
+                        dt = datetime.fromisoformat(iso_str).replace(tzinfo=None)
+                        occupied_slots.add(dt)
                     except ValueError:
                         continue
             
-            if timestamps:
-                last_from_file = max(timestamps)
-                print(f"   [Scheduler] Last scheduled video in file: {last_from_file}")
-                
-                # If the last video is in the future, we continue from there.
-                # If it's in the past (e.g. yesterday), we start from 'Now' to avoid scheduling in the past.
-                if last_from_file > now:
-                    last_scheduled_dt = last_from_file
-                else:
-                    print("   [Scheduler] Last video is in the past. Starting fresh from Now.")
-                    last_scheduled_dt = now
-
+            print(f"   [Scheduler] Found {len(occupied_slots)} occupied slots from file.")
         except Exception as e:
             print(f"   [Scheduler] Error reading JSON: {e}")
 
-    # --- 2. Find Next Slot ---
-    current_check_dt = last_scheduled_dt
+    # --- 2. Find First Available Slot ---
+    now = datetime.now()
+    current_check_date = now.date()
     
-    # Check next 14 days
-    for day_offset in range(14):
-        target_date = current_check_dt.date() + timedelta(days=day_offset)
+    # Check the next 30 days for a slot
+    for day_offset in range(30):
+        target_date = current_check_date + timedelta(days=day_offset)
         
-        # Define the 3 slots for this target date
-        slots = [
+        # Define the 3 fixed slots for this target date
+        daily_slots = [
             datetime.combine(target_date, time(12, 0)), # 12:00 PM
             datetime.combine(target_date, time(18, 0)), # 6:00 PM
             datetime.combine(target_date, time(21, 0))  # 9:00 PM
         ]
         
-        for slot in slots:
-            # 1. Must be after the last scheduled video (sequence order)
-            # 2. Must be in the future relative to real-world time (validity)
-            if slot > current_check_dt and slot > now:
-                
-                # Formatting
-                time_str = slot.strftime("%I:%M %p").lstrip("0") # "6:00 PM"
-                date_str = slot.strftime("%b %d, %Y")            # "Jan 08, 2026"
-                
-                print(f"   [Scheduler] Next Slot Calculated: {date_str} @ {time_str}")
-                return date_str, time_str
+        for slot in daily_slots:
+            # Rule 1: Slot must be in the future relative to 'now'
+            if slot <= now:
+                continue
 
-    print("Error: Could not calculate a slot within 14 days.")
+            # Rule 2: Slot must not be in the occupied list
+            # We check if the exact slot exists in our set
+            if slot in occupied_slots:
+                print(f"   [Scheduler] Skipping occupied slot: {slot}")
+                continue
+            
+            # If we pass both rules, this is our winner
+            time_str = slot.strftime("%I:%M %p").lstrip("0") # "6:00 PM"
+            date_str = slot.strftime("%b %d, %Y")            # "Jan 08, 2026"
+            
+            print(f"   [Scheduler] Next Available Slot: {date_str} @ {time_str}")
+            return date_str, time_str
+
+    print("Error: Could not calculate a slot within 30 days.")
     return None, None
