@@ -1,0 +1,30 @@
+[
+    {
+        "title": "test video asdfasdf",
+        "original_tooltip": "Scheduled\n\nThis video is currently private and is scheduled to become public on January 30, 2026 at 3:15\u202fPM",
+        "schedule": {
+            "iso": "2026-01-30T15:15:00-05:00",
+            "year": 2026,
+            "month": 1,
+            "day": 30,
+            "hour": 15,
+            "minute": 15,
+            "timezone": "America/New_York",
+            "raw_clean": "January 30, 2026 at 3:15 PM"
+        }
+    },
+    {
+        "title": "Are you stuck He went through the map",
+        "original_tooltip": "Scheduled\n\nThis video is currently private and is scheduled to become public on January 8, 2026 at 6:00\u202fPM",
+        "schedule": {
+            "iso": "2026-01-08T18:00:00-05:00",
+            "year": 2026,
+            "month": 1,
+            "day": 8,
+            "hour": 18,
+            "minute": 0,
+            "timezone": "America/New_York",
+            "raw_clean": "January 8, 2026 at 6:00 PM"
+        }
+    }
+]
