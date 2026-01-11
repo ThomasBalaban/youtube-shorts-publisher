@@ -187,27 +187,61 @@ class DraftShortsAnalyzer:
             print(f"Error downloading {video_id} (Check your cookies.txt?): {e}")
             return None
 
-    def analyze_with_gemini(self, video_path, title):
-        prompt = f"""You are an expert YouTube editor reviewing a DRAFT video before publication.
-        
-Video Title: "{title}"
 
-Please provide a critique:
-1. **Hook Check**: Does the first 3 seconds grab attention?
-2. **Pacing**: Is it too slow or too fast?
-3. **Title Relevance**: Does the video deliver on the title?
-4. **Viral Potential**: Rating 1-10 and one specific fix to improve it.
-"""
-        print("  Uploading to Gemini...")
-        video_file = genai.upload_file(path=str(video_path))
-        
-        while video_file.state.name == "PROCESSING":
-            time.sleep(2)
-            video_file = genai.get_file(video_file.name)
+    def analyze_with_gemini(self, video_path, current_title):
+            # We pass the current title so Gemini has context, but we will strictly 
+            # use the API's title in the final object to ensure accuracy.
+            prompt = f"""
+            You are an expert YouTube Shorts strategist and metadata specialist. 
+            Analyze the uploaded video and the current title: "{current_title}".
+
+            Return a valid JSON object with the following fields:
+
+            1. "description": A short, vivid summary of what happens in the video (visuals and audio). 
+            2. "virality": A score from 1-10 (integer).
+            3. "virality_reasoning": A short explanation of why it will/won't perform well.
+            4. "game_name": The name of the game being played. IMPORTANT: If you are not >90% confident, or if it looks like a generic/unknown fan game, return "Unknown".
+            5. "new_title": A click-worthy, engaging title (max 60 chars) optimized for Shorts.
+            6. "youtube_description": A 1-2 sentence description suitable for the YouTube video description box.
+            7. "hashtags": 2-4 specific hashtags (e.g., "#fnaf #jumpscare").
+            8. "tags": Comma-separated tags (e.g., "horror, funny moments"). MUST be under 250 characters total.
+
+            Ensure the output is pure JSON.
+            """
             
-        response = self.gemini_model.generate_content([video_file, prompt])
-        genai.delete_file(video_file.name)
-        return response.text
+            print(f"  Uploading to Gemini (Title: {current_title})...")
+            video_file = genai.upload_file(path=str(video_path))
+            
+            # Wait for processing
+            while video_file.state.name == "PROCESSING":
+                time.sleep(2)
+                video_file = genai.get_file(video_file.name)
+                
+            # Request JSON response specifically
+            try:
+                response = self.gemini_model.generate_content(
+                    [video_file, prompt],
+                    generation_config={"response_mime_type": "application/json"}
+                )
+                
+                # clean up file from cloud
+                genai.delete_file(video_file.name)
+                
+                # Parse the JSON string into a Python dict
+                data = json.loads(response.text)
+                
+                # Force the title to be the exact YouTube title (per your request)
+                data['title'] = current_title 
+                
+                return data
+                
+            except Exception as e:
+                print(f"  Gemini Error: {e}")
+                # Return a fallback dict to prevent script crash
+                return {
+                    "title": current_title,
+                    "error": str(e)
+                }
 
     def run(self):
         print("--- Draft Shorts Analyzer ---")
@@ -215,6 +249,7 @@ Please provide a critique:
         results = []
         analyzed_titles = set()
         
+        # Load existing
         if os.path.exists(self.output_file):
             try:
                 with open(self.output_file, 'r') as f:
@@ -224,9 +259,8 @@ Please provide a critique:
                         for item in results:
                             if 'title' in item:
                                 analyzed_titles.add(item['title'])
-                print(f"Loaded {len(results)} existing analyses from {self.output_file}")
+                print(f"Loaded {len(results)} existing analyses.")
             except (json.JSONDecodeError, IOError):
-                print(f"Warning: Could not read {self.output_file}. Starting fresh.")
                 results = []
 
         drafts = self.fetch_my_drafts()
@@ -236,27 +270,31 @@ Please provide a critique:
                 print(f"\n[{i}/{len(drafts)}] Skipping (Already Analyzed): {draft['title']}")
                 continue
 
-            print(f"\n[{i}/{len(drafts)}] Analyzing Draft: {draft['title']} ({draft['status_label']})")
+            print(f"\n[{i}/{len(drafts)}] Analyzing: {draft['title']}")
             
             video_path = self.download_private_video(draft['url'], draft['video_id'])
             
             if video_path and video_path.exists():
-                analysis = self.analyze_with_gemini(video_path, draft['title'])
-                print("\n" + ">" * 20 + " GEMINI FEEDBACK " + "<" * 20)
-                print(analysis)
-                print(">" * 57)
+                # Get the structured analysis dictionary
+                analysis_dict = self.analyze_with_gemini(video_path, draft['title'])
                 
-                results.append({
-                    'title': draft['title'],
-                    'status': draft['status_label'],
-                    'analysis': analysis
-                })
-                
+                # Print a clean summary to console so you can see progress
+                if "error" not in analysis_dict:
+                    print("-" * 40)
+                    print(f"Game: {analysis_dict.get('game_name')}")
+                    print(f"Score: {analysis_dict.get('virality')}/10")
+                    print(f"Idea: {analysis_dict.get('new_title')}")
+                    print("-" * 40)
+                else:
+                    print(f"Analysis Failed: {analysis_dict['error']}")
+
+                results.append(analysis_dict)
                 analyzed_titles.add(draft['title'])
                 video_path.unlink()
-            
-            with open(self.output_file, 'w') as f:
-                json.dump(results, f, indent=2)
+                
+                # Save after every video so you don't lose progress
+                with open(self.output_file, 'w') as f:
+                    json.dump(results, f, indent=2)
 
     def cleanup(self):
         if self.temp_dir.exists():
