@@ -1,7 +1,7 @@
 """
-Analyze Draft YouTube Shorts
-This script fetches your own uploaded videos (including private/drafts),
-downloads them using your browser cookies, and analyzes them with Gemini.
+Analyze Draft YouTube Shorts (Strictly Drafts/Unlisted)
+This script fetches your own uploaded videos, IGNORING Scheduled content,
+and analyzes only true drafts or unlisted videos with Gemini.
 """
 
 import json
@@ -32,12 +32,14 @@ COOKIES_FILE = "cookies.txt"
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
 # -----------------------------------------------------------------------------
-# Replace this with your Gemini API Key directly or use a config file
+# Script Settings
+# -----------------------------------------------------------------------------
 GEMINI_API_KEY = GEMINI_API_KEY
+IGNORE_ANALYZED_TITLES = True 
 # -----------------------------------------------------------------------------
 
 class DraftShortsAnalyzer:
-    def __init__(self, output_file="draft_analysis.json", max_videos=10):
+    def __init__(self, output_file="draft_analysis.json", max_videos=50):
         self.output_file = output_file
         self.max_videos = max_videos
         self.temp_dir = Path("temp_draft_download")
@@ -49,7 +51,7 @@ class DraftShortsAnalyzer:
         self.gemini_model = genai.GenerativeModel('models/gemini-2.5-flash')
 
     def _authenticate_youtube(self):
-        """Authenticates the user via OAuth to access private data."""
+        """Authenticates the user via OAuth."""
         creds = None
         token_path = 'token.json'
         
@@ -62,75 +64,94 @@ class DraftShortsAnalyzer:
             else:
                 if not os.path.exists(CLIENT_SECRETS_FILE):
                     print(f"ERROR: {CLIENT_SECRETS_FILE} not found.")
-                    print("Please download your OAuth 2.0 Client ID JSON from Google Cloud Console.")
                     sys.exit(1)
-                    
                 flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
                 creds = flow.run_local_server(port=0)
-                
-            # Save credentials for next run
             with open(token_path, 'w') as token:
                 token.write(creds.to_json())
-                
         return build('youtube', 'v3', credentials=creds)
 
+    def get_uploads_playlist_id(self):
+        response = self.youtube.channels().list(part="contentDetails", mine=True).execute()
+        if not response['items']:
+            raise Exception("No channel found for authenticated user.")
+        return response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+
     def fetch_my_drafts(self):
-        """Fetches the authenticated user's uploaded videos (including private)."""
-        print("Fetching your videos (including private/drafts)...")
+        """Fetches videos, strictly ignoring Scheduled items."""
+        print(f"Fetching up to {self.max_videos} Draft/Unlisted shorts (Ignoring Scheduled)...")
         
         try:
-            # 1. Search for user's own videos (forMine=True)
-            # We fetch 50 at a time and filter for Shorts manually
-            request = self.youtube.search().list(
-                part="id,snippet",
-                forMine=True,
-                type="video",
-                maxResults=50,
-                order="date" # Newest first
-            )
-            response = request.execute()
-            
-            video_ids = [item['id']['videoId'] for item in response.get('items', [])]
-            
-            if not video_ids:
-                print("No videos found.")
-                return []
+            uploads_playlist_id = self.get_uploads_playlist_id()
+        except Exception as e:
+            print(f"Error fetching channel details: {e}")
+            return []
 
-            # 2. Get details to check duration (is it a Short?) and privacy status
-            videos_response = self.youtube.videos().list(
-                part='snippet,contentDetails,status',
-                id=','.join(video_ids)
-            ).execute()
+        draft_shorts = []
+        next_page_token = None
+        
+        try:
+            while len(draft_shorts) < self.max_videos:
+                # Get videos from Uploads playlist
+                request = self.youtube.playlistItems().list(
+                    part="snippet",
+                    playlistId=uploads_playlist_id,
+                    maxResults=50,
+                    pageToken=next_page_token
+                )
+                response = request.execute()
+                
+                video_ids = [item['snippet']['resourceId']['videoId'] for item in response.get('items', [])]
+                
+                if not video_ids:
+                    print("No more videos found.")
+                    break
 
-            draft_shorts = []
-            
-            for video in videos_response.get('items', []):
-                duration = video['contentDetails']['duration']
-                privacy = video['status']['privacyStatus']
-                title = video['snippet']['title']
-                
-                # Check if it is a short (< 60s) AND (Private OR Unlisted)
-                is_short = self._is_short_duration(duration)
-                is_hidden = privacy in ['private', 'unlisted']
-                
-                if is_short and is_hidden:
-                    draft_shorts.append({
-                        'video_id': video['id'],
-                        'title': title,
-                        'privacy': privacy,
-                        'published_date': video['snippet']['publishedAt'],
-                        'url': f"https://www.youtube.com/watch?v={video['id']}" # Use watch URL for yt-dlp
-                    })
+                # Get status details
+                videos_response = self.youtube.videos().list(
+                    part='snippet,contentDetails,status',
+                    id=','.join(video_ids)
+                ).execute()
+
+                for video in videos_response.get('items', []):
+                    if len(draft_shorts) >= self.max_videos:
+                        break
+
+                    duration = video['contentDetails']['duration']
+                    privacy = video['status']['privacyStatus']
+                    publish_at = video['status'].get('publishAt') # Exists only if scheduled
+                    title = video['snippet']['title']
                     
-            print(f"Found {len(draft_shorts)} private/unlisted shorts in your recent uploads.")
-            return draft_shorts[:self.max_videos]
+                    is_short = self._is_short_duration(duration)
+                    is_scheduled = publish_at is not None
+                    is_hidden = privacy in ['private', 'unlisted']
+                    
+                    # LOGIC CHANGE HERE: Strict exclusion of scheduled videos
+                    if is_short and is_hidden and not is_scheduled:
+                        draft_shorts.append({
+                            'video_id': video['id'],
+                            'title': title,
+                            'status_label': privacy.capitalize(), 
+                            'published_date': video['snippet']['publishedAt'],
+                            'url': f"https://www.youtube.com/watch?v={video['id']}"
+                        })
+                    elif is_scheduled:
+                        # Optional: Print that we are skipping a scheduled video so you know it's working
+                        # print(f"Skipping Scheduled: {title}")
+                        pass
+
+                next_page_token = response.get('nextPageToken')
+                if not next_page_token:
+                    break
+                    
+            print(f"Found {len(draft_shorts)} shorts to analyze.")
+            return draft_shorts
 
         except HttpError as e:
             print(f"YouTube API Error: {e}")
-            return []
+            return draft_shorts
 
     def _is_short_duration(self, duration_str):
-        """Simple check if duration is under 60 seconds."""
         if 'H' in duration_str: return False
         duration = duration_str.replace('PT', '')
         minutes = 0
@@ -142,21 +163,19 @@ class DraftShortsAnalyzer:
                 seconds = int(parts[1].replace('S', ''))
         elif 'S' in duration:
             seconds = int(duration.replace('S', ''))
-        return (minutes * 60 + seconds) <= 61 # 61s buffer
+        return (minutes * 60 + seconds) <= 61
 
     def download_private_video(self, video_url, video_id):
-        """Downloads a private video using cookies."""
         if not os.path.exists(COOKIES_FILE):
             raise FileNotFoundError(f"Missing {COOKIES_FILE}. Cannot download private videos without cookies.")
 
         output_path = self.temp_dir / f"{video_id}.mp4"
         
-        # yt-dlp options specifically for private videos
         ydl_opts = {
             'format': 'best[ext=mp4]',
             'outtmpl': str(output_path),
             'quiet': True,
-            'cookiefile': COOKIES_FILE, # CRITICAL: Pass cookies here
+            'cookiefile': COOKIES_FILE,
             'no_warnings': True,
         }
         
@@ -169,7 +188,6 @@ class DraftShortsAnalyzer:
             return None
 
     def analyze_with_gemini(self, video_path, title):
-        """Analyzes the draft video."""
         prompt = f"""You are an expert YouTube editor reviewing a DRAFT video before publication.
         
 Video Title: "{title}"
@@ -188,19 +206,37 @@ Please provide a critique:
             video_file = genai.get_file(video_file.name)
             
         response = self.gemini_model.generate_content([video_file, prompt])
-        
-        # Cleanup
         genai.delete_file(video_file.name)
         return response.text
 
     def run(self):
         print("--- Draft Shorts Analyzer ---")
-        drafts = self.fetch_my_drafts()
         
         results = []
+        analyzed_titles = set()
+        
+        if os.path.exists(self.output_file):
+            try:
+                with open(self.output_file, 'r') as f:
+                    file_content = json.load(f)
+                    if isinstance(file_content, list):
+                        results = file_content
+                        for item in results:
+                            if 'title' in item:
+                                analyzed_titles.add(item['title'])
+                print(f"Loaded {len(results)} existing analyses from {self.output_file}")
+            except (json.JSONDecodeError, IOError):
+                print(f"Warning: Could not read {self.output_file}. Starting fresh.")
+                results = []
+
+        drafts = self.fetch_my_drafts()
         
         for i, draft in enumerate(drafts, 1):
-            print(f"\n[{i}/{len(drafts)}] Analyzing Draft: {draft['title']} ({draft['privacy']})")
+            if IGNORE_ANALYZED_TITLES and draft['title'] in analyzed_titles:
+                print(f"\n[{i}/{len(drafts)}] Skipping (Already Analyzed): {draft['title']}")
+                continue
+
+            print(f"\n[{i}/{len(drafts)}] Analyzing Draft: {draft['title']} ({draft['status_label']})")
             
             video_path = self.download_private_video(draft['url'], draft['video_id'])
             
@@ -212,12 +248,13 @@ Please provide a critique:
                 
                 results.append({
                     'title': draft['title'],
+                    'status': draft['status_label'],
                     'analysis': analysis
                 })
                 
-                video_path.unlink() # Delete temp video
+                analyzed_titles.add(draft['title'])
+                video_path.unlink()
             
-            # Save progress
             with open(self.output_file, 'w') as f:
                 json.dump(results, f, indent=2)
 
