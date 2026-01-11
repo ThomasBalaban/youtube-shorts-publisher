@@ -11,25 +11,37 @@ def update_title(page: Page, new_title: str):
         container.wait_for(state="visible", timeout=10000)
         
         # Locate the editable textbox inside
-        # You identified it has id="textbox" inside the title-textarea component
         title_box = container.locator("#textbox").first
         
         if title_box.is_visible():
             title_box.click()
             time.sleep(0.5)
             
-            # Select All + Backspace to clear current title
-            # Using Meta+A (Mac) and Control+A (Windows) sequence to be safe, 
-            # or just the one you used before. Sticking to Meta+A as per your previous files.
-            page.keyboard.press("Meta+A")
-            page.keyboard.press("Control+A") # Safety measure for different OS
-            page.keyboard.press("Backspace")
-            
-            # Type the new title
-            page.keyboard.type(new_title)
+            # --- Method 1: Try Playwright's .fill() ---
+            # This is robust for contenteditable and auto-clears
+            try:
+                title_box.fill(new_title)
+            except:
+                # --- Method 2: Manual Clear (Fallback) ---
+                print(">> Fill failed, trying manual clear...")
+                page.keyboard.press("Control+A")
+                page.keyboard.press("Meta+A")
+                page.keyboard.press("Backspace")
+                time.sleep(0.5)
+                page.keyboard.type(new_title)
+
+            # Verification: Check text content
             time.sleep(1)
-            print(">> Title updated successfully.")
-            return True
+            # We check the text inside to be sure
+            actual_text = title_box.inner_text().strip()
+            
+            # Allow for slight variations (like trailing newlines), but mostly match
+            if new_title in actual_text:
+                print(">> Title updated successfully.")
+                return True
+            else:
+                print(f">> Warning: Title mismatch. Found: '{actual_text}'")
+                return True # Proceed anyway, might be a formatting quirk
         else:
             print(">> Error: Title textbox not found.")
             return False

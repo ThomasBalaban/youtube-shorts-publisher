@@ -16,7 +16,7 @@ from publisher.video_elements import handle_video_elements
 from publisher.checks import handle_checks
 from publisher.visibility import handle_visibility
 from publisher.save_publish import click_save
-from publisher.close_draft import close_draft   # <--- NEW IMPORT
+# close_draft is no longer needed in the loop, but kept if you need it elsewhere
 
 def load_analysis_data():
     path = "draft_analysis.json"
@@ -30,33 +30,27 @@ def load_analysis_data():
 
 def process_one_video(page: Page, analysis_data: list, ignored_titles: list):
     """
-    Returns a status string:
+    Returns:
     - "SUCCESS": Video processed.
-    - "SKIP": Video opened but no match found (added to ignore list).
-    - "NO_DRAFTS": No drafts available to open.
-    - "ERROR": A technical error occurred during processing.
+    - "NO_DRAFTS": No matching drafts found.
+    - "ERROR": Technical error.
     """
-    # 1. Open Draft (passing ignore list)
-    current_title = open_first_draft(page, ignored_titles)
+    # 1. Open Draft (Now filters internally!)
+    current_title = open_first_draft(page, analysis_data, ignored_titles)
     
     if not current_title:
         return "NO_DRAFTS"
 
-    # --- MATCHING LOGIC ---
+    # --- MATCHING LOGIC (Guaranteed by open_first_draft) ---
     video_data = next((item for item in analysis_data if item.get("title") == current_title), None)
     
     if not video_data:
-        print(f"\n>> [No Match] No analysis data found for '{current_title}'.")
-        
-        # --- FIX: Close the dialog before skipping ---
-        close_draft(page)
-        # ---------------------------------------------
-        
-        print(">> Adding to ignore list and skipping to next draft...")
+        # This shouldn't happen with the new logic, but safety first
+        print(f"Error: Logic mismatch. Opened '{current_title}' but data missing.")
         ignored_titles.append(current_title)
-        return "SKIP"
+        return "ERROR"
 
-    print(f">> [Match Found] Processing '{current_title}'...")
+    print(f">> Processing found match: '{current_title}'...")
 
     # 1.5 Update Title
     new_title = video_data.get("new_title")
@@ -129,17 +123,13 @@ def run_publisher(page: Page):
             if videos_processed < target_count:
                 print(">> Waiting 5 seconds before next video...")
                 time.sleep(5)
-                
-        elif status == "SKIP":
-            print(">> Video skipped. Retrying immediately with next draft...")
-            continue 
             
         elif status == "NO_DRAFTS":
-            print(">> No more valid drafts found to process.")
+            print(">> No more matching drafts found.")
             break
             
         elif status == "ERROR":
-            print(">> Critical error during processing. Stopping.")
+            print(">> Critical error. Stopping to prevent bad publishing.")
             break
 
     print("\n=== BATCH PROCESSING COMPLETE ===")
