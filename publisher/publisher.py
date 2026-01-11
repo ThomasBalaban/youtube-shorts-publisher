@@ -1,10 +1,13 @@
 import time
+import json
+import os
 from playwright.sync_api import Page
-from settings import VIDEOS_TO_PROCESS_COUNT
+from settings import VIDEOS_TO_PROCESS_COUNT, TEST_MODE
 from config.navigation import navigate_to_shorts
 
 # Import steps
 from publisher.open_draft import open_first_draft
+from publisher.edit_title import update_title
 from publisher.edit_description import update_description
 from publisher.edit_metadata import uncheck_notify_subscribers
 from publisher.wizard_navigation import click_next
@@ -13,98 +16,130 @@ from publisher.video_elements import handle_video_elements
 from publisher.checks import handle_checks
 from publisher.visibility import handle_visibility
 from publisher.save_publish import click_save
+from publisher.close_draft import close_draft   # <--- NEW IMPORT
 
-def process_one_video(page: Page):
-    """
-    Encapsulates the logic for a single video. 
-    Returns True if successful, False if failed.
-    """
-    # 1. Open Draft
-    if not open_first_draft(page):
-        return False
+def load_analysis_data():
+    path = "draft_analysis.json"
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load {path}: {e}")
+    return []
 
+def process_one_video(page: Page, analysis_data: list, ignored_titles: list):
+    """
+    Returns a status string:
+    - "SUCCESS": Video processed.
+    - "SKIP": Video opened but no match found (added to ignore list).
+    - "NO_DRAFTS": No drafts available to open.
+    - "ERROR": A technical error occurred during processing.
+    """
+    # 1. Open Draft (passing ignore list)
+    current_title = open_first_draft(page, ignored_titles)
+    
+    if not current_title:
+        return "NO_DRAFTS"
+
+    # --- MATCHING LOGIC ---
+    video_data = next((item for item in analysis_data if item.get("title") == current_title), None)
+    
+    if not video_data:
+        print(f"\n>> [No Match] No analysis data found for '{current_title}'.")
+        
+        # --- FIX: Close the dialog before skipping ---
+        close_draft(page)
+        # ---------------------------------------------
+        
+        print(">> Adding to ignore list and skipping to next draft...")
+        ignored_titles.append(current_title)
+        return "SKIP"
+
+    print(f">> [Match Found] Processing '{current_title}'...")
+
+    # 1.5 Update Title
+    new_title = video_data.get("new_title")
+    if new_title:
+        if not update_title(page, new_title): return "ERROR"
+    
     # 2. Edit Description
-    if not update_description(page):
-        return False
+    if not update_description(page): return "ERROR"
 
     # 3. Uncheck Notify Subscribers
-    if not uncheck_notify_subscribers(page):
-        return False
+    if not uncheck_notify_subscribers(page): return "ERROR"
 
-    # --- PRE-CHECK: AD SUITABILITY STATUS ---
-    ad_suitability_already_done = is_ad_suitability_completed(page)
-
-    # 4. Navigate to Ad Suitability
+    # 4. Ad Suitability
     print(">> Moving to Ad Suitability tab...")
-    if not click_next(page):
-        return False
-        
-    # 5. Confirm Ad Suitability
-    if ad_suitability_already_done:
-        print(">> Skipping Ad Suitability form (previously completed).")
+    if not click_next(page): return "ERROR"
+    
+    if not is_ad_suitability_completed(page):
+        if not complete_ad_suitability(page): return "ERROR"
     else:
-        if not complete_ad_suitability(page):
-            return False
+        print(">> Ad Suitability already done.")
 
-    # 6. Navigate to Video Elements
+    # 6. Video Elements
     print(">> Moving to Video Elements tab...")
-    if not click_next(page):
-        return False
+    if not click_next(page): return "ERROR"
+    if not handle_video_elements(page): return "ERROR"
 
-    # 7. Handle Video Elements
-    if not handle_video_elements(page):
-        return False
-
-    # 8. Navigate to Checks
+    # 8. Checks
     print(">> Moving to Checks tab...")
-    if not click_next(page):
-        return False
+    if not click_next(page): return "ERROR"
+    if not handle_checks(page): return "ERROR"
 
-    # 9. Verify Checks
-    if not handle_checks(page):
-        return False
-
-    # 10. Navigate to Visibility
-    print(">> Checks passed. Moving to Visibility tab...")
-    if not click_next(page):
-        return False
-
-    # 11. Handle Visibility (Scheduling)
-    if not handle_visibility(page):
-        return False
+    # 10. Visibility
+    print(">> Moving to Visibility tab...")
+    if not click_next(page): return "ERROR"
+    if not handle_visibility(page): return "ERROR"
 
     # 12. Save / Schedule
-    if not click_save(page):
-        return False
+    if not click_save(page): return "ERROR"
 
     print(">> Video processed successfully.")
-    return True
+    return "SUCCESS"
 
 def run_publisher(page: Page):
-    """
-    Main loop that processes multiple videos based on settings.
-    """
-    print(f"\n=== STARTING PUBLISHER: TARGET {VIDEOS_TO_PROCESS_COUNT} VIDEOS ===")
+    analysis_data = load_analysis_data()
+    print(f"Loaded {len(analysis_data)} analysis entries.")
+
+    target_count = 1 if TEST_MODE else VIDEOS_TO_PROCESS_COUNT
+    mode_label = "TEST MODE (1 Video)" if TEST_MODE else f"LIVE MODE ({target_count} Videos)"
     
-    for i in range(VIDEOS_TO_PROCESS_COUNT):
+    print(f"\n=== STARTING PUBLISHER: {mode_label} ===")
+    
+    videos_processed = 0
+    ignored_titles = [] 
+
+    while videos_processed < target_count:
         print(f"\n--------------------------------------------------")
-        print(f"STARTING VIDEO {i+1} of {VIDEOS_TO_PROCESS_COUNT}")
+        print(f"ATTEMPTING NEXT VIDEO (Processed: {videos_processed}/{target_count})")
         print(f"--------------------------------------------------")
-        
-        # 1. Ensure we are on the Shorts list (Reset state)
-        print(">> Resetting navigation to Shorts list...")
+
+        # 1. Ensure we are on the Shorts list
         if not navigate_to_shorts(page):
-            print("CRITICAL: Could not navigate to Shorts list. Aborting loop.")
+            print("CRITICAL: Navigation failed. Aborting.")
             break
         
-        # 2. Process one video
-        success = process_one_video(page)
+        # 2. Process
+        status = process_one_video(page, analysis_data, ignored_titles)
         
-        if not success:
-            print(f"\n>> Stopping loop due to failure on video {i+1}.")
+        if status == "SUCCESS":
+            videos_processed += 1
+            if videos_processed < target_count:
+                print(">> Waiting 5 seconds before next video...")
+                time.sleep(5)
+                
+        elif status == "SKIP":
+            print(">> Video skipped. Retrying immediately with next draft...")
+            continue 
+            
+        elif status == "NO_DRAFTS":
+            print(">> No more valid drafts found to process.")
             break
             
-        print(f"\n>> Video {i+1} complete. Waiting 5 seconds before next...")
-        time.sleep(5)
+        elif status == "ERROR":
+            print(">> Critical error during processing. Stopping.")
+            break
 
     print("\n=== BATCH PROCESSING COMPLETE ===")
