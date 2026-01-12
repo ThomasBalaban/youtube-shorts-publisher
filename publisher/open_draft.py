@@ -1,4 +1,5 @@
 from playwright.sync_api import Page
+import time
 
 def open_first_draft(page: Page, analysis_data: list, ignore_titles: list = None):
     print("\n--- Step 1: Open First Draft ---")
@@ -8,66 +9,86 @@ def open_first_draft(page: Page, analysis_data: list, ignore_titles: list = None
         
     # --- BUILD LOOKUP MAP ---
     # Maps { Visible Title -> Original Title Key }
-    # This allows us to find a match even if the video has already been renamed to 'new_title'
     title_map = {}
     for item in analysis_data:
         original_title = item.get("title")
         if original_title:
-            # Map the original title to itself (Primary Match)
             title_map[original_title] = original_title
             
-            # Map the new_title to the original title (Secondary Match)
-            # This handles cases where the bot updated the title but crashed/stopped before publishing
             new_title = item.get("new_title")
             if new_title:
                 title_map[new_title] = original_title
     
     print(f"Scanning for {len(title_map)} potential title matches (Ignoring {len(ignore_titles)})...")
 
-    # Wait for the video list to load
-    try:
-        page.wait_for_selector("ytcp-video-row", state="visible", timeout=10000)
-    except:
-        print("Error: Video rows did not load.")
-        return None
+    page_count = 1
 
-    rows = page.locator("ytcp-video-row").all()
+    # --- PAGINATION LOOP ---
+    while True:
+        print(f">> Scanning Page {page_count}...")
 
-    for row in rows:
+        # Wait for rows to load
         try:
-            # Check if it's a draft
-            if "Draft" in row.inner_text():
-                title_link = row.locator("#video-title").first
-                
-                if title_link.is_visible():
-                    visible_title = title_link.inner_text().strip()
-                    
-                    # 1. Filter Backtracks
-                    if "Backtrack" in visible_title:
-                        continue
+            page.wait_for_selector("ytcp-video-row", state="visible", timeout=5000)
+        except:
+            print("   [Info] No video rows detected on this page.")
 
-                    # 2. Check for Match in our Map
-                    if visible_title in title_map:
-                        original_key = title_map[visible_title]
+        # Get all rows on current page
+        rows = page.locator("ytcp-video-row").all()
+
+        # --- ROW SCANNING ---
+        for row in rows:
+            try:
+                # Check if it's a draft
+                # (We check text content safely to avoid stale element errors)
+                row_text = row.inner_text()
+                if "Draft" in row_text:
+                    title_link = row.locator("#video-title").first
+                    
+                    if title_link.is_visible():
+                        visible_title = title_link.inner_text().strip()
                         
-                        # 3. Check Ignore List (We check the ID/Original Key)
-                        if original_key in ignore_titles:
+                        # 1. Filter Backtracks
+                        if "Backtrack" in visible_title:
                             continue
 
-                        print(f">> Found Match: '{visible_title}'")
-                        if visible_title != original_key:
-                             print(f"   (Mapped to original analysis key: '{original_key}')")
-                             
-                        print(">> Opening Draft...")
-                        title_link.click()
-                        
-                        # CRITICAL: We return the ORIGINAL key.
-                        # This ensures the main script can look up the correct JSON data 
-                        # even if the visible title on YouTube is already the "new" one.
-                        return original_key
+                        # 2. Check for Match in our Map
+                        if visible_title in title_map:
+                            original_key = title_map[visible_title]
+                            
+                            # 3. Check Ignore List
+                            if original_key in ignore_titles:
+                                continue
 
-        except Exception as e:
-            continue
+                            print(f">> Found Match: '{visible_title}'")
+                            if visible_title != original_key:
+                                 print(f"   (Mapped to original analysis key: '{original_key}')")
+                                 
+                            print(">> Opening Draft...")
+                            title_link.click()
+                            
+                            return original_key
 
-    print("No matching drafts found on the current page.")
+            except Exception as e:
+                # Stale element or UI update during scan
+                continue
+        
+        # --- PAGINATION LOGIC (Re-used from scraper) ---
+        print(f"   [Info] No match found on Page {page_count}.")
+        
+        # Look for the 'Next Page' button
+        next_button = page.locator("#navigate-after")
+        
+        # Check if button exists and is actionable (not disabled)
+        if not next_button.is_visible() or next_button.get_attribute("aria-disabled") == "true":
+            print(">> End of list reached. No matching drafts found.")
+            break
+        
+        print(">> Navigating to next page...")
+        next_button.click()
+        
+        # Wait for the table to refresh
+        time.sleep(3)
+        page_count += 1
+
     return None
