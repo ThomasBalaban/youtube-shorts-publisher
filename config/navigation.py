@@ -1,3 +1,48 @@
+from playwright.sync_api import Page
+from settings import ENABLE_SCRAPING_MODE
+import time
+
+def filter_for_drafts(page: Page):
+    """
+    Applies the 'Visibility: Draft' filter using specific user-provided IDs.
+    """
+    print(">> Filtering for 'Draft' visibility...")
+    try:
+        # 1. Click the Filter Bar (Input)
+        # IDs provided: id="video-filter" id="text-input"
+        filter_input = page.locator("#video-filter #text-input")
+        filter_input.wait_for(state="visible", timeout=5000)
+        filter_input.click()
+        
+        # 2. Click the 'Visibility' menu item
+        # ID provided: text-item-9
+        visibility_option = page.locator("#text-item-9")
+        visibility_option.wait_for(state="visible", timeout=5000)
+        visibility_option.click()
+        
+        # 3. Click the 'Draft' checkbox
+        # ID provided: test-id="DRAFT"
+        draft_checkbox = page.locator("[test-id='DRAFT']")
+        draft_checkbox.wait_for(state="visible", timeout=5000)
+        draft_checkbox.click()
+        
+        # 4. Click Apply
+        # Selector provided: .ytcp-filter-dialog id="apply-button" button
+        apply_btn = page.locator(".ytcp-filter-dialog #apply-button")
+        apply_btn.click()
+        
+        # Wait for the table to refresh with the new filter
+        time.sleep(2)
+        print(">> Filter applied: Showing only Drafts.")
+
+        return True
+
+    except Exception as e:
+        print(f"Warning: Could not apply Draft filter: {e}")
+        # We return True anyway because we don't want to crash the whole bot 
+        # just because the filter failed; it can still try to scan manually.
+        return True
+
 def navigate_to_shorts(page):
     print("--- Starting Navigation Sequence ---")
     
@@ -7,11 +52,8 @@ def navigate_to_shorts(page):
     
     # We will try 3 different selectors ranging from specific to general
     selectors = [
-        # 1. The exact class you found
         "div.nav-item-text:has-text('Content')",
-        # 2. The link that goes to the videos page (often the most robust)
         "a[href*='/videos/upload']",
-        # 3. Just the text 'Content' anywhere (fallback)
         "text='Content'"
     ]
 
@@ -27,7 +69,6 @@ def navigate_to_shorts(page):
             try:
                 btn = page.locator(selector).first
                 if btn.is_visible():
-                    # force=True skips the "is this actionable" check
                     btn.click(force=True)
                     print(f">> Success: Clicked Content using selector: {selector}")
                     content_clicked = True
@@ -42,12 +83,7 @@ def navigate_to_shorts(page):
         page.wait_for_timeout(1000)
 
     if not content_clicked:
-        print("ERROR: Could not click 'Content' button. Dumping page text for debug:")
-        # This will print what Playwright actually sees on the left side
-        try:
-            print(page.locator("ytcp-navigation-drawer").inner_text())
-        except:
-            print("Could not read sidebar text.")
+        print("ERROR: Could not click 'Content' button.")
         return False
 
     # --- STEP 2: WAIT FOR PAGE CHANGE ---
@@ -74,6 +110,12 @@ def navigate_to_shorts(page):
         page.wait_for_timeout(1000)
 
     if shorts_clicked:
+        if ENABLE_SCRAPING_MODE == False: 
+            filter_for_drafts(page)
+            page.wait_for_timeout(3000)
+            header =  page.locator("h1.page-title").first
+            header.click()
+        
         print("--- Navigation Complete ---")
         return True
     

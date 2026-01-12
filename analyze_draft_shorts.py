@@ -80,37 +80,41 @@ class DraftShortsAnalyzer:
             raise Exception("No channel found for authenticated user.")
         return response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
 
+    
     def fetch_my_drafts(self):
-        """Fetches videos, strictly ignoring Scheduled items."""
-        print(f"Fetching up to {self.max_videos} Draft/Unlisted shorts (Ignoring Scheduled)...")
+        """
+        Fetches videos using search(forMine=True).
+        NOTE: YouTube API forbids using 'videoDuration' with 'forMine'.
+        We MUST fetch mixed results and filter out long videos in Python.
+        """
+        print(f"Fetching up to {self.max_videos} Draft/Unlisted shorts (via Search)...")
         
-        try:
-            uploads_playlist_id = self.get_uploads_playlist_id()
-        except Exception as e:
-            print(f"Error fetching channel details: {e}")
-            return []
-
         draft_shorts = []
         next_page_token = None
-        
+        page_count = 0 
+        MAX_PAGES = 10 
+
         try:
-            while len(draft_shorts) < self.max_videos:
-                # Get videos from Uploads playlist
-                request = self.youtube.playlistItems().list(
-                    part="snippet",
-                    playlistId=uploads_playlist_id,
+            while len(draft_shorts) < self.max_videos and page_count < MAX_PAGES:
+                page_count += 1
+                
+                # REVERTED: Removed 'videoDuration' parameter (Causes 400 Error with forMine)
+                request = self.youtube.search().list(
+                    part="id",
+                    forMine=True,
+                    type="video",
                     maxResults=50,
+                    order="date", 
                     pageToken=next_page_token
                 )
                 response = request.execute()
                 
-                video_ids = [item['snippet']['resourceId']['videoId'] for item in response.get('items', [])]
+                video_ids = [item['id']['videoId'] for item in response.get('items', [])]
                 
                 if not video_ids:
                     print("No more videos found.")
                     break
 
-                # Get status details
                 videos_response = self.youtube.videos().list(
                     part='snippet,contentDetails,status',
                     id=','.join(video_ids)
@@ -122,37 +126,47 @@ class DraftShortsAnalyzer:
 
                     duration = video['contentDetails']['duration']
                     privacy = video['status']['privacyStatus']
-                    publish_at = video['status'].get('publishAt') # Exists only if scheduled
+                    upload_status = video['status'].get('uploadStatus')
+                    publish_at = video['status'].get('publishAt')
                     title = video['snippet']['title']
                     
                     is_short = self._is_short_duration(duration)
                     is_scheduled = publish_at is not None
-                    is_hidden = privacy in ['private', 'unlisted']
                     
-                    # LOGIC CHANGE HERE: Strict exclusion of scheduled videos
-                    if is_short and is_hidden and not is_scheduled:
+                    # 1. Filter out Long Videos SILENTLY (don't print anything)
+                    if not is_short:
+                        continue
+
+                    # 2. Filter out Public/Scheduled (We only want Drafts)
+                    if privacy == 'public' or is_scheduled:
+                        continue
+                    
+                    # 3. If we are here, it is a Short AND it is hidden/draft
+                    if privacy in ['private', 'unlisted']:
                         draft_shorts.append({
                             'video_id': video['id'],
                             'title': title,
-                            'status_label': privacy.capitalize(), 
+                            'status_label': f"{privacy.capitalize()} ({upload_status})", 
                             'published_date': video['snippet']['publishedAt'],
                             'url': f"https://www.youtube.com/watch?v={video['id']}"
                         })
-                    elif is_scheduled:
-                        # Optional: Print that we are skipping a scheduled video so you know it's working
-                        # print(f"Skipping Scheduled: {title}")
-                        pass
 
                 next_page_token = response.get('nextPageToken')
                 if not next_page_token:
                     break
-                    
-            print(f"Found {len(draft_shorts)} shorts to analyze.")
+            
+            # If we looped through pages and found nothing (common if you have many recent streams)
+            if not draft_shorts:
+                print(f"Checked {page_count} pages but found no eligible Draft Shorts.")
+            else:
+                print(f"Found {len(draft_shorts)} shorts to analyze.")
+                
             return draft_shorts
 
         except HttpError as e:
             print(f"YouTube API Error: {e}")
             return draft_shorts
+    
 
     def _is_short_duration(self, duration_str):
         if 'H' in duration_str: return False

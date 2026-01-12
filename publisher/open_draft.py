@@ -42,21 +42,24 @@ def open_first_draft(page: Page, analysis_data: list, ignore_titles: list = None
                 # Check if it's a draft
                 # (We check text content safely to avoid stale element errors)
                 row_text = row.inner_text()
+                
+                # We check for 'Draft' in the row text.
+                # Note: If you have already filtered by "Visibility: Draft", this is redundant but safe.
                 if "Draft" in row_text:
                     title_link = row.locator("#video-title").first
                     
                     if title_link.is_visible():
                         visible_title = title_link.inner_text().strip()
                         
-                        # 1. Filter Backtracks
-                        if "Backtrack" in visible_title:
-                            continue
-
-                        # 2. Check for Match in our Map
+                        # --- FIX: REMOVED BACKTRACK FILTER ---
+                        # Previously, the bot would skip any title containing "Backtrack".
+                        # Since your current drafts are named "Backtrack...", we must allow them.
+                        
+                        # Check for Match in our Map
                         if visible_title in title_map:
                             original_key = title_map[visible_title]
                             
-                            # 3. Check Ignore List
+                            # Check Ignore List
                             if original_key in ignore_titles:
                                 continue
 
@@ -68,12 +71,16 @@ def open_first_draft(page: Page, analysis_data: list, ignore_titles: list = None
                             title_link.click()
                             
                             return original_key
+                        else:
+                            # Optional debug print to help you see what it found but rejected
+                            # print(f"   [Debug] Ignored non-matching title: '{visible_title}'")
+                            pass
 
             except Exception as e:
                 # Stale element or UI update during scan
                 continue
         
-        # --- PAGINATION LOGIC (Re-used from scraper) ---
+        # --- PAGINATION LOGIC ---
         print(f"   [Info] No match found on Page {page_count}.")
         
         # Look for the 'Next Page' button
