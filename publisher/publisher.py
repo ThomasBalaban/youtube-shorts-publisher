@@ -16,7 +16,6 @@ from publisher.video_elements import handle_video_elements
 from publisher.checks import handle_checks
 from publisher.visibility import handle_visibility
 from publisher.save_publish import click_save
-# close_draft is no longer needed in the loop, but kept if you need it elsewhere
 
 def load_analysis_data():
     path = "draft_analysis.json"
@@ -41,11 +40,10 @@ def process_one_video(page: Page, analysis_data: list, ignored_titles: list):
     if not current_title:
         return "NO_DRAFTS"
 
-    # --- MATCHING LOGIC (Guaranteed by open_first_draft) ---
+    # --- MATCHING LOGIC ---
     video_data = next((item for item in analysis_data if item.get("title") == current_title), None)
     
     if not video_data:
-        # This shouldn't happen with the new logic, but safety first
         print(f"Error: Logic mismatch. Opened '{current_title}' but data missing.")
         ignored_titles.append(current_title)
         return "ERROR"
@@ -57,8 +55,11 @@ def process_one_video(page: Page, analysis_data: list, ignored_titles: list):
     if new_title:
         if not update_title(page, new_title): return "ERROR"
     
-    # 2. Edit Description
-    if not update_description(page): return "ERROR"
+    # 2. Edit Description (Updated to pass data)
+    description = video_data.get("youtube_description", "")
+    hashtags = video_data.get("hashtags", [])
+    
+    if not update_description(page, description, hashtags): return "ERROR"
 
     # 3. Uncheck Notify Subscribers
     if not uncheck_notify_subscribers(page): return "ERROR"

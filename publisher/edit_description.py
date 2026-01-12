@@ -1,11 +1,19 @@
 from playwright.sync_api import Page
 import time
 
-def update_description(page: Page):
+def update_description(page: Page, description: str, hashtags: list):
     print("\n--- Step 2: Update Description ---")
-    print(">> Waiting for description box...")
     
-    # Specific selector for the description box
+    # 1. Format the text
+    # We join the list of tags into a string like "#tag1 #tag2"
+    tags_string = " ".join(hashtags) if hashtags else ""
+    
+    # Create the full block: Description + Double Newline + Tags
+    full_text = f"{description}\n\n{tags_string}".strip()
+    
+    print(f">> Preparing description ({len(full_text)} chars)...")
+    
+    print(">> Waiting for description box...")
     description_selector = "div#textbox[aria-label*='Tell viewers']"
     
     try:
@@ -16,11 +24,19 @@ def update_description(page: Page):
         time.sleep(0.5)
         
         print(">> Clearing old description...")
+        # robust clear
+        page.keyboard.press("Control+A")
         page.keyboard.press("Meta+A") 
         page.keyboard.press("Backspace")
         
         print(">> Typing new description...")
-        page.keyboard.type("test #test")
+        # Using .fill() is preferred for speed, but .type() is safer for rich text editors
+        # if .fill() fails in the future, revert to .type(full_text)
+        try:
+            desc_box.fill(full_text)
+        except:
+            print("   [Info] .fill() failed, reverting to keyboard typing...")
+            page.keyboard.type(full_text)
         
     except Exception as e:
         print(f"Error handling description: {e}")

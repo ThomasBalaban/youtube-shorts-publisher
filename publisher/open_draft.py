@@ -6,10 +6,23 @@ def open_first_draft(page: Page, analysis_data: list, ignore_titles: list = None
     if ignore_titles is None:
         ignore_titles = []
         
-    # Create a set of titles we actually want to process
-    target_titles = {item.get("title") for item in analysis_data if item.get("title")}
+    # --- BUILD LOOKUP MAP ---
+    # Maps { Visible Title -> Original Title Key }
+    # This allows us to find a match even if the video has already been renamed to 'new_title'
+    title_map = {}
+    for item in analysis_data:
+        original_title = item.get("title")
+        if original_title:
+            # Map the original title to itself (Primary Match)
+            title_map[original_title] = original_title
+            
+            # Map the new_title to the original title (Secondary Match)
+            # This handles cases where the bot updated the title but crashed/stopped before publishing
+            new_title = item.get("new_title")
+            if new_title:
+                title_map[new_title] = original_title
     
-    print(f"Scanning for {len(target_titles)} target titles (Ignoring {len(ignore_titles)})...")
+    print(f"Scanning for {len(title_map)} potential title matches (Ignoring {len(ignore_titles)})...")
 
     # Wait for the video list to load
     try:
@@ -27,26 +40,31 @@ def open_first_draft(page: Page, analysis_data: list, ignore_titles: list = None
                 title_link = row.locator("#video-title").first
                 
                 if title_link.is_visible():
-                    video_title = title_link.inner_text().strip()
+                    visible_title = title_link.inner_text().strip()
                     
-                    # 1. Skip if previously ignored
-                    if video_title in ignore_titles:
-                        continue
-                        
-                    # 2. Skip Backtracks
-                    if "Backtrack" in video_title:
+                    # 1. Filter Backtracks
+                    if "Backtrack" in visible_title:
                         continue
 
-                    # 3. CRITICAL: Check if this title exists in our analysis JSON
-                    if video_title in target_titles:
-                        print(f">> Found Match: '{video_title}'")
+                    # 2. Check for Match in our Map
+                    if visible_title in title_map:
+                        original_key = title_map[visible_title]
+                        
+                        # 3. Check Ignore List (We check the ID/Original Key)
+                        if original_key in ignore_titles:
+                            continue
+
+                        print(f">> Found Match: '{visible_title}'")
+                        if visible_title != original_key:
+                             print(f"   (Mapped to original analysis key: '{original_key}')")
+                             
                         print(">> Opening Draft...")
                         title_link.click()
-                        return video_title
-                    else:
-                        # Log that we saw it but skipped it (optional, keeps logs clean)
-                        # print(f"   [Skipping] No analysis data for: '{video_title}'")
-                        pass
+                        
+                        # CRITICAL: We return the ORIGINAL key.
+                        # This ensures the main script can look up the correct JSON data 
+                        # even if the visible title on YouTube is already the "new" one.
+                        return original_key
 
         except Exception as e:
             continue
