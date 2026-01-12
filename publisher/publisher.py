@@ -9,6 +9,7 @@ from config.navigation import navigate_to_shorts
 from publisher.open_draft import open_first_draft
 from publisher.edit_title import update_title
 from publisher.edit_description import update_description
+from publisher.edit_tags import update_tags  # <--- NEW IMPORT
 from publisher.edit_metadata import uncheck_notify_subscribers
 from publisher.wizard_navigation import click_next
 from publisher.ad_suitability import is_ad_suitability_completed, complete_ad_suitability
@@ -55,11 +56,17 @@ def process_one_video(page: Page, analysis_data: list, ignored_titles: list):
     if new_title:
         if not update_title(page, new_title): return "ERROR"
     
-    # 2. Edit Description (Updated to pass data)
+    # 2. Edit Description
     description = video_data.get("youtube_description", "")
     hashtags = video_data.get("hashtags", [])
     
     if not update_description(page, description, hashtags): return "ERROR"
+
+    # --- 2.5 Update Tags (NEW STEP) ---
+    tags = video_data.get("tags", "")
+    # We proceed even if tags fail, so no "return ERROR" needed, but we call it here
+    update_tags(page, tags)
+    # ----------------------------------
 
     # 3. Uncheck Notify Subscribers
     if not uncheck_notify_subscribers(page): return "ERROR"

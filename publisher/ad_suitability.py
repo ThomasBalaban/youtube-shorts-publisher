@@ -70,7 +70,20 @@ def complete_ad_suitability(page: Page):
     try:
         submit_btn = page.locator("#submit-questionnaire-button")
         
+        # Check if button exists
         if submit_btn.is_visible():
+            
+            # --- FIX: Check if disabled first ---
+            # If the rating is already submitted, the button is present but disabled.
+            # Playwright's click() waits for it to be enabled, causing the timeout.
+            is_disabled = submit_btn.is_disabled() or submit_btn.get_attribute("aria-disabled") == "true"
+            
+            if is_disabled:
+                print(">> [Info] 'Submit rating' button is DISABLED (Rating likely already submitted).")
+                print(">> Proceeding as success.")
+                return True
+
+            # If enabled, click it
             submit_btn.click()
             print(">> Clicked 'Submit rating'.")
             time.sleep(3) # Wait for processing
