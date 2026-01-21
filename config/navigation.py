@@ -111,7 +111,6 @@ def navigate_to_shorts(page):
 
     if shorts_clicked:
         if ENABLE_SCRAPING_MODE == False: 
-            filter_for_drafts(page)
             page.wait_for_timeout(3000)
             header =  page.locator("h1.page-title").first
             header.click()

@@ -3,8 +3,9 @@ import sys
 from playwright.sync_api import sync_playwright
 from config.navigation import navigate_to_shorts
 from config.scraper import VideoScraper
-from publisher.publisher import run_publisher  # Changed import
-from settings import PROCESS_SINGLE_VIDEO, ENABLE_SCRAPING_MODE
+from publisher.publisher import run_publisher
+from analyzer.playwright_analyzer import PlaywrightAnalyzer  # <--- New Import
+from settings import PROCESS_SINGLE_VIDEO, ENABLE_SCRAPING_MODE, ENABLE_ANALYSIS_MODE # <--- Updated Import
 
 def run():
     user_data_dir = os.path.join(os.getcwd(), "user_data")
@@ -27,7 +28,12 @@ def run():
         if navigate_to_shorts(page):
             
             # --- BRANCHING LOGIC ---
-            if ENABLE_SCRAPING_MODE:
+            if ENABLE_ANALYSIS_MODE:     # <--- New Branch for Analyzer
+                print("\n=== MODE: ANALYZER (Download & AI) ===")
+                analyzer = PlaywrightAnalyzer(page)
+                analyzer.run()
+
+            elif ENABLE_SCRAPING_MODE:
                 print("\n=== MODE: SCRAPER ===")
                 scraper = VideoScraper(page)
                 scraper.scrape_all()
