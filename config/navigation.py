@@ -2,47 +2,6 @@ from playwright.sync_api import Page
 from settings import ENABLE_SCRAPING_MODE
 import time
 
-def filter_for_drafts(page: Page):
-    """
-    Applies the 'Visibility: Draft' filter using specific user-provided IDs.
-    """
-    print(">> Filtering for 'Draft' visibility...")
-    try:
-        # 1. Click the Filter Bar (Input)
-        # IDs provided: id="video-filter" id="text-input"
-        filter_input = page.locator("#video-filter #text-input")
-        filter_input.wait_for(state="visible", timeout=5000)
-        filter_input.click()
-        
-        # 2. Click the 'Visibility' menu item
-        # ID provided: text-item-9
-        visibility_option = page.locator("#text-item-9")
-        visibility_option.wait_for(state="visible", timeout=5000)
-        visibility_option.click()
-        
-        # 3. Click the 'Draft' checkbox
-        # ID provided: test-id="DRAFT"
-        draft_checkbox = page.locator("[test-id='DRAFT']")
-        draft_checkbox.wait_for(state="visible", timeout=5000)
-        draft_checkbox.click()
-        
-        # 4. Click Apply
-        # Selector provided: .ytcp-filter-dialog id="apply-button" button
-        apply_btn = page.locator(".ytcp-filter-dialog #apply-button")
-        apply_btn.click()
-        
-        # Wait for the table to refresh with the new filter
-        time.sleep(2)
-        print(">> Filter applied: Showing only Drafts.")
-
-        return True
-
-    except Exception as e:
-        print(f"Warning: Could not apply Draft filter: {e}")
-        # We return True anyway because we don't want to crash the whole bot 
-        # just because the filter failed; it can still try to scan manually.
-        return True
-
 def navigate_to_shorts(page):
     print("--- Starting Navigation Sequence ---")
     
