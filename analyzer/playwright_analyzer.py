@@ -5,6 +5,7 @@ import random
 import re
 from pathlib import Path
 from playwright.sync_api import Page
+from config.navigation import navigate_to_shorts
 import google.generativeai as genai
 from settings import GEMINI_API_KEY
 
@@ -133,7 +134,14 @@ class PlaywrightAnalyzer:
         print(f">> Loaded {len(analyzed_titles)} previously analyzed titles.")
 
         while True:
-            self.page.wait_for_selector("ytcp-video-row", state="visible")
+            # Wait for rows
+            try:
+                self.page.wait_for_selector("ytcp-video-row", state="visible", timeout=10000)
+            except:
+                print(">> No video rows found. Retrying/Checking navigation...")
+                navigate_to_shorts(self.page)
+                continue
+
             rows = self.page.locator("ytcp-video-row").all()
             processed_in_pass = 0
             
@@ -159,14 +167,17 @@ class PlaywrightAnalyzer:
                     row.evaluate("element => element.scrollIntoView({ block: 'center', behavior: 'instant' })")
                     time.sleep(0.5) 
                     
+                    # HOVER ROW FIRST (Fixes missing Options button)
+                    row.hover()
+                    time.sleep(0.5)
+
                     # 2. TARGET OPTIONS BUTTON (Ellipses)
                     options_btn = row.locator("ytcp-icon-button[aria-label='Options']").first
                     
-                    # --- FIX: HOVER ROW/BUTTON FIRST ---
                     # Get coordinates of the ellipses button
                     opt_box = options_btn.bounding_box()
                     if not opt_box:
-                        print("   [Warning] Options button not visible. Skipping.")
+                        print("   [Warning] Options button not visible (bounding box failed). Skipping.")
                         continue
                         
                     opt_x = opt_box["x"] + opt_box["width"] / 2
@@ -176,17 +187,21 @@ class PlaywrightAnalyzer:
                     self.page.mouse.move(opt_x, opt_y, steps=10)
                     
                     # WAIT 1 SECOND (Simulate human looking at the row)
-                    print("   [UI] Hovering Options...")
+                    print("   [UI] Hovering Options (Physical Mouse)...")
                     time.sleep(1.0)
                     
-                    # Click the ellipses
+                    # Click the ellipses (Physical click required for menu to appear cleanly)
                     self.page.mouse.click(opt_x, opt_y)
                     # -----------------------------------
                     
+                    download_info = None
+
                     try:
-                        # 3. LOCATE DOWNLOAD BUTTON STRICTLY
+                        # 3. LOCATE DOWNLOAD BUTTON
                         
-                        # A. Find the visible dialog
+                        # A. Wait for the menu dialog to appear
+                        time.sleep(1.0) # Allow animation
+                        
                         active_dialog = self.page.locator("tp-yt-paper-dialog").filter(
                             has_not=self.page.locator("[style*='display: none']")
                         ).filter(
@@ -195,63 +210,76 @@ class PlaywrightAnalyzer:
                         
                         # B. Find the download link inside that dialog
                         download_link = active_dialog.locator("a[href*='download']").filter(has_text="Download").first
-                        download_link.scroll_into_view_if_needed()
+                        
+                        # C. Standard Playwright Click with Safety
                         download_link.wait_for(state="visible", timeout=5000)
                         
-                        # C. Get precise coordinates for Download
-                        dl_box = download_link.bounding_box()
-                        if not dl_box:
-                            raise Exception("Download button bounding box not found")
+                        print("   [UI] Clicking Download (Standard)...")
+                        
+                        # --- DOWNLOAD SAFETY BLOCK ---
+                        try:
+                            # 5 second timeout for download to start
+                            with self.page.expect_download(timeout=5000) as download_info_ctx:
+                                download_link.click()
+                            download_info = download_info_ctx.value
+
+                        except Exception as e:
+                            print(f"   [Error] Download did not start: {e}")
                             
-                        dl_x = dl_box["x"] + dl_box["width"] / 2
-                        dl_y = dl_box["y"] + dl_box["height"] / 2
-                        
-                        # D. Move to Download
-                        self.page.mouse.move(dl_x, dl_y, steps=15)
-                        
-                        # E. Hover Download for 1 Second
-                        print("   [UI] Hovering Download...")
-                        time.sleep(1.0)
-                        
-                        # F. Click Download
-                        with self.page.expect_download() as download_info:
-                            self.page.mouse.click(dl_x, dl_y)
+                            # SAFETY CHECK: Are we still on Shorts tab?
+                            # Using the user-provided selector logic
+                            shorts_tab = self.page.locator("#video-list-shorts-tab[aria-selected='true']")
                             
+                            if shorts_tab.is_visible():
+                                print("   [Safety] Still on Shorts tab. This video is likely bugged. Skipping.")
+                                # Close the open menu by clicking empty space
+                                self.page.mouse.move(0, 0)
+                                self.page.mouse.click(0, 0)
+                                # Mark as analyzed so we don't loop on it? 
+                                # Optional: analyzed_titles.add(title) if you want to permanently skip it.
+                                # For now, we just skip this iteration.
+                                continue 
+                            else:
+                                print("   [Safety] Not on Shorts tab! Context lost. Navigating back...")
+                                navigate_to_shorts(self.page)
+                                # Reset loop to find rows again
+                                break 
+                        
                     except Exception as e:
                         print(f"   [Error] Menu navigation failed: {e}")
-                        # Emergency reset
+                        # Emergency reset: Move mouse away and click empty space to close menu
                         self.page.mouse.move(0, 0)
                         self.page.mouse.click(0, 0)
                         continue
 
                     # --- INTERACTION END ---
                     
-                    download = download_info.value
-                    save_path = self.temp_dir / f"{title[:10]}_{int(time.time())}.mp4"
-                    
-                    print(f"   [Download] Saving to {save_path}...")
-                    download.save_as(save_path)
+                    if download_info:
+                        save_path = self.temp_dir / f"{title[:10]}_{int(time.time())}.mp4"
+                        
+                        print(f"   [Download] Saving to {save_path}...")
+                        download_info.save_as(save_path)
 
-                    # Reset mouse
-                    self.page.mouse.move(0, 0)
-                    self.page.mouse.click(0, 0)
-                    time.sleep(0.5) 
-                    
-                    # Analyze
-                    result = self.analyze_with_gemini(save_path, title)
-                    
-                    if "error" not in result:
-                        print("-" * 30)
-                        print(f"NEW TITLE: {result.get('new_title')}")
-                        print(f"SCORE: {result.get('virality')}/10")
-                        print("-" * 30)
-                        self._save_result(result)
-                        analyzed_titles.add(title)
-                    else:
-                        print(f"   [Error] Gemini failed: {result['error']}")
+                        # Reset mouse
+                        self.page.mouse.move(0, 0)
+                        self.page.mouse.click(0, 0)
+                        time.sleep(0.5) 
+                        
+                        # Analyze
+                        result = self.analyze_with_gemini(save_path, title)
+                        
+                        if "error" not in result:
+                            print("-" * 30)
+                            print(f"NEW TITLE: {result.get('new_title')}")
+                            print(f"SCORE: {result.get('virality')}/10")
+                            print("-" * 30)
+                            self._save_result(result)
+                            analyzed_titles.add(title)
+                        else:
+                            print(f"   [Error] Gemini failed: {result['error']}")
 
-                    if save_path.exists():
-                        os.remove(save_path)
+                        if save_path.exists():
+                            os.remove(save_path)
                     
                     processed_in_pass += 1
                     
@@ -272,5 +300,4 @@ class PlaywrightAnalyzer:
                     break
 
 
-
-
+                
