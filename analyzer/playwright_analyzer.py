@@ -8,7 +8,7 @@ from playwright.sync_api import Page
 import google.generativeai as genai
 from settings import GEMINI_API_KEY
 
-# Copying Safe Word Mapping from your original script
+# Safe Word Mapping
 SAFE_WORD_MAPPING = {
     "dick": "MAN PARTS", "dicks": "MAN PARTS", "penis": "MAN PARTS",
     "cock": "ROOSTER", "fuck": "EFF", "fucking": "FREAKING",
@@ -19,7 +19,6 @@ class PlaywrightAnalyzer:
     def __init__(self, page: Page):
         self.page = page
         self.output_file = "draft_analysis.json"
-        # We use a specific temp folder to keep your Downloads clean
         self.temp_dir = Path(os.getcwd()) / "temp_draft_download"
         self.temp_dir.mkdir(exist_ok=True)
         
@@ -55,6 +54,7 @@ class PlaywrightAnalyzer:
         print(f"   [Gemini] Uploading {current_title}...")
         video_file = genai.upload_file(path=str(video_path))
         
+        # Wait for processing
         while video_file.state.name == "PROCESSING":
             time.sleep(2)
             video_file = genai.get_file(video_file.name)
@@ -127,22 +127,23 @@ class PlaywrightAnalyzer:
             return {"title": current_title, "error": str(e)}
 
     def run(self):
-        print("\n=== MODE: PLAYWRIGHT ANALYZER ===")
+        print("\n=== MODE: PLAYWRIGHT ANALYZER (Drafts Only) ===")
         
-        # 1. Setup Filter
         analyzed_titles = self._load_analyzed_titles()
-        
         print(f">> Loaded {len(analyzed_titles)} previously analyzed titles.")
 
         while True:
-            # Refresh rows
             self.page.wait_for_selector("ytcp-video-row", state="visible")
             rows = self.page.locator("ytcp-video-row").all()
-            
             processed_in_pass = 0
             
             for row in rows:
                 try:
+                    # Filter for Drafts
+                    visibility_cell = row.locator(".tablecell-visibility")
+                    if "Draft" not in visibility_cell.inner_text().strip():
+                        continue
+
                     title_el = row.locator("#video-title").first
                     if not title_el.is_visible(): continue
                     title = title_el.inner_text().strip()
@@ -150,33 +151,93 @@ class PlaywrightAnalyzer:
                     if title in analyzed_titles:
                         continue
                         
-                    print(f"\n>> Processing: {title}")
+                    print(f"\n>> Processing Draft: {title}")
                     
-                    # --- DOWNLOAD SEQUENCE ---
-                    # 1. Hover to trigger 'is-highlighted' and reveal options
-                    row.hover()
-                    time.sleep(0.5)
+                    # --- INTERACTION START ---
                     
-                    # 2. Find and Click Options (Three dots)
-                    # The button usually has aria-label="Options"
+                    # 1. SCROLL ROW TO CENTER
+                    row.evaluate("element => element.scrollIntoView({ block: 'center', behavior: 'instant' })")
+                    time.sleep(0.5) 
+                    
+                    # 2. TARGET OPTIONS BUTTON (Ellipses)
                     options_btn = row.locator("ytcp-icon-button[aria-label='Options']").first
-                    options_btn.click()
                     
-                    # 3. Wait for the menu to appear
-                    # 4. Click the specific Download element user requested
-                    download_selector = "yt-formatted-string.item-text.main-text.style-scope.ytcp-text-menu:text('Download')"
-                    
-                    # Setup Download Listener
-                    with self.page.expect_download() as download_info:
-                        self.page.locator(download_selector).click()
+                    # --- FIX: HOVER ROW/BUTTON FIRST ---
+                    # Get coordinates of the ellipses button
+                    opt_box = options_btn.bounding_box()
+                    if not opt_box:
+                        print("   [Warning] Options button not visible. Skipping.")
+                        continue
                         
+                    opt_x = opt_box["x"] + opt_box["width"] / 2
+                    opt_y = opt_box["y"] + opt_box["height"] / 2
+                    
+                    # Physically move to the ellipses
+                    self.page.mouse.move(opt_x, opt_y, steps=10)
+                    
+                    # WAIT 1 SECOND (Simulate human looking at the row)
+                    print("   [UI] Hovering Options...")
+                    time.sleep(1.0)
+                    
+                    # Click the ellipses
+                    self.page.mouse.click(opt_x, opt_y)
+                    # -----------------------------------
+                    
+                    try:
+                        # 3. LOCATE DOWNLOAD BUTTON STRICTLY
+                        
+                        # A. Find the visible dialog
+                        active_dialog = self.page.locator("tp-yt-paper-dialog").filter(
+                            has_not=self.page.locator("[style*='display: none']")
+                        ).filter(
+                            has_not=self.page.locator("[style*='display:none']")
+                        ).locator("visible=true").first
+                        
+                        # B. Find the download link inside that dialog
+                        download_link = active_dialog.locator("a[href*='download']").filter(has_text="Download").first
+                        download_link.scroll_into_view_if_needed()
+                        download_link.wait_for(state="visible", timeout=5000)
+                        
+                        # C. Get precise coordinates for Download
+                        dl_box = download_link.bounding_box()
+                        if not dl_box:
+                            raise Exception("Download button bounding box not found")
+                            
+                        dl_x = dl_box["x"] + dl_box["width"] / 2
+                        dl_y = dl_box["y"] + dl_box["height"] / 2
+                        
+                        # D. Move to Download
+                        self.page.mouse.move(dl_x, dl_y, steps=15)
+                        
+                        # E. Hover Download for 1 Second
+                        print("   [UI] Hovering Download...")
+                        time.sleep(1.0)
+                        
+                        # F. Click Download
+                        with self.page.expect_download() as download_info:
+                            self.page.mouse.click(dl_x, dl_y)
+                            
+                    except Exception as e:
+                        print(f"   [Error] Menu navigation failed: {e}")
+                        # Emergency reset
+                        self.page.mouse.move(0, 0)
+                        self.page.mouse.click(0, 0)
+                        continue
+
+                    # --- INTERACTION END ---
+                    
                     download = download_info.value
                     save_path = self.temp_dir / f"{title[:10]}_{int(time.time())}.mp4"
                     
                     print(f"   [Download] Saving to {save_path}...")
                     download.save_as(save_path)
+
+                    # Reset mouse
+                    self.page.mouse.move(0, 0)
+                    self.page.mouse.click(0, 0)
+                    time.sleep(0.5) 
                     
-                    # --- GEMINI ANALYSIS ---
+                    # Analyze
                     result = self.analyze_with_gemini(save_path, title)
                     
                     if "error" not in result:
@@ -189,18 +250,15 @@ class PlaywrightAnalyzer:
                     else:
                         print(f"   [Error] Gemini failed: {result['error']}")
 
-                    # --- CLEANUP ---
                     if save_path.exists():
                         os.remove(save_path)
                     
                     processed_in_pass += 1
-                    # Clean UI (Click away to close any lingering menus)
-                    self.page.mouse.move(0, 0)
-                    self.page.mouse.click(0, 0)
-                    time.sleep(1)
-
+                    
                 except Exception as e:
                     print(f"   [Warning] Skipped row due to error: {e}")
+                    self.page.mouse.move(0, 0)
+                    self.page.mouse.click(0, 0)
                     continue
             
             if processed_in_pass == 0:
@@ -212,3 +270,7 @@ class PlaywrightAnalyzer:
                 else:
                     print(">> Done. All drafts analyzed.")
                     break
+
+
+
+

@@ -52,7 +52,7 @@ def navigate_to_shorts(page):
         print("Warning: URL update slow.")
 
     # --- STEP 3: CLICK SHORTS ---
-    print("Looking for 'Shorts' filter...")
+    print("Looking for 'Shorts'...")
     shorts_clicked = False
     
     for i in range(15):
