@@ -43,8 +43,8 @@ def get_next_schedule_time():
     now = datetime.now()
     current_check_date = now.date()
     
-    # Check the next 30 days
-    for day_offset in range(30):
+    # Check the next 60 days (Increased from 30 to allow Next Month scheduling)
+    for day_offset in range(60):
         target_date = current_check_date + timedelta(days=day_offset)
         
         # Define the 3 fixed slots for this target date
@@ -80,5 +80,5 @@ def get_next_schedule_time():
             print(f"   [Scheduler] Next Available Slot: {date_str} @ {time_str}")
             return date_str, time_str
 
-    print("Error: Could not calculate a slot within 30 days.")
+    print("Error: Could not calculate a slot within 60 days.")
     return None, None

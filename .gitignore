@@ -8,3 +8,5 @@ draft_analysis.json
 gemjam.py
 client_secret1.json
 client_secret2.json
+temp_draft_download/**
+failed_shorts_data.json

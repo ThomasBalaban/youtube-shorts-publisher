@@ -46,9 +46,10 @@ class VideoScraper:
         drafts_data = []
         scheduled_data = []
         page_count = 1
+        MAX_PAGES = 15  # <--- LIMIT SET HERE
         
         # --- STEP 1: SCAN PAGES ---
-        while True:
+        while page_count <= MAX_PAGES:
             print(f"Scanning page {page_count}...")
             
             try:
@@ -131,6 +132,11 @@ class VideoScraper:
             next_button = self.page.locator("#navigate-after")
             if not next_button.is_visible() or next_button.get_attribute("aria-disabled") == "true":
                 print("End of list reached.")
+                break
+            
+            # Check limit before navigating to next page
+            if page_count >= MAX_PAGES:
+                print(f"Reached page limit ({MAX_PAGES}). Stopping.")
                 break
             
             print("Moving to next page...")

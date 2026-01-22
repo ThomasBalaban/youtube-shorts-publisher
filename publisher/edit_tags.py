@@ -1,9 +1,7 @@
 from playwright.sync_api import Page
 import time
 
-def update_tags(page: Page, tags: str):
-    print("\n--- Step 2.5: Update Tags ---")
-    
+def update_tags(page: Page, tags: str):    
     if not tags:
         print(">> No tags provided in analysis. Skipping.")
         return True

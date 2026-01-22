@@ -20,6 +20,7 @@ class PlaywrightAnalyzer:
     def __init__(self, page: Page):
         self.page = page
         self.output_file = "draft_analysis.json"
+        self.failed_file = "failed_shorts_data.json"
         self.temp_dir = Path(os.getcwd()) / "temp_draft_download"
         self.temp_dir.mkdir(exist_ok=True)
         
@@ -39,6 +40,36 @@ class PlaywrightAnalyzer:
                 pass
         return analyzed
 
+    def _load_failed_titles(self):
+        failed = set()
+        if os.path.exists(self.failed_file):
+            try:
+                with open(self.failed_file, 'r') as f:
+                    data = json.load(f)
+                    for item in data:
+                        if 'title' in item: failed.add(item['title'])
+            except:
+                pass
+        return failed
+
+    def _save_failure(self, title, error_msg):
+        current_data = []
+        if os.path.exists(self.failed_file):
+            try:
+                with open(self.failed_file, 'r') as f:
+                    current_data = json.load(f)
+            except:
+                pass
+        
+        current_data.append({
+            "title": title,
+            "error": str(error_msg),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+        
+        with open(self.failed_file, 'w') as f:
+            json.dump(current_data, f, indent=2)
+
     def _save_result(self, result):
         current_data = []
         if os.path.exists(self.output_file):
@@ -55,7 +86,6 @@ class PlaywrightAnalyzer:
         print(f"   [Gemini] Uploading {current_title}...")
         video_file = genai.upload_file(path=str(video_path))
         
-        # Wait for processing
         while video_file.state.name == "PROCESSING":
             time.sleep(2)
             video_file = genai.get_file(video_file.name)
@@ -105,7 +135,6 @@ class PlaywrightAnalyzer:
             genai.delete_file(video_file.name)
             data = json.loads(response.text)
             
-            # Post-processing (RNG Emoji Removal + Safety Filter)
             if random.random() < 0.65:
                 data['new_title'] = re.sub(r'[^\x00-\x7F]+', '', data['new_title']).strip()
             
@@ -115,7 +144,6 @@ class PlaywrightAnalyzer:
                 
             data['title'] = current_title
             
-            # FNAF Safety
             if data.get('is_fnaf_game', False):
                 tags = data.get('hashtags', [])
                 if not tags or tags[0].lower() != '#fnaf':
@@ -131,76 +159,82 @@ class PlaywrightAnalyzer:
         print("\n=== MODE: PLAYWRIGHT ANALYZER (Drafts Only) ===")
         
         analyzed_titles = self._load_analyzed_titles()
+        failed_titles = self._load_failed_titles()
+        
         print(f">> Loaded {len(analyzed_titles)} previously analyzed titles.")
+        print(f">> Loaded {len(failed_titles)} previously failed titles (will be skipped).")
 
         while True:
-            # Wait for rows
-            try:
-                self.page.wait_for_selector("ytcp-video-row", state="visible", timeout=10000)
-            except:
-                print(">> No video rows found. Retrying/Checking navigation...")
+            # --- 1. Robust Row Waiting (with Retry) ---
+            rows_found = False
+            for attempt in range(3):
+                try:
+                    self.page.wait_for_selector("ytcp-video-row", state="visible", timeout=6000)
+                    rows_found = True
+                    break
+                except:
+                    print(f">> Waiting for video rows... (Attempt {attempt+1}/3)")
+                    time.sleep(2)
+            
+            if not rows_found:
+                print(">> No video rows found after retries. Checking navigation...")
                 navigate_to_shorts(self.page)
                 continue
 
+            # --- 2. Process Rows ---
             rows = self.page.locator("ytcp-video-row").all()
             processed_in_pass = 0
             
             for row in rows:
                 try:
-                    # Filter for Drafts
+                    # --- Logic Adopted from Scraper (Robust) ---
+                    # 1. Get Status Text
                     visibility_cell = row.locator(".tablecell-visibility")
-                    if "Draft" not in visibility_cell.inner_text().strip():
-                        continue
+                    status_text = visibility_cell.inner_text().strip()
 
+                    # 2. Get Title
                     title_el = row.locator("#video-title").first
-                    if not title_el.is_visible(): continue
-                    title = title_el.inner_text().strip()
-                    
-                    if title in analyzed_titles:
+                    if title_el.count() == 0:
+                        # Skip if title element isn't in DOM
                         continue
+                    
+                    title = title_el.inner_text().strip()
+
+                    # 3. Filter for Drafts
+                    if "Draft" not in status_text:
+                        continue
+                    
+                    # 4. Filter for Already Processed
+                    if title in analyzed_titles or title in failed_titles:
+                        continue
+                    # -------------------------------------------
                         
                     print(f"\n>> Processing Draft: {title}")
                     
                     # --- INTERACTION START ---
-                    
-                    # 1. SCROLL ROW TO CENTER
                     row.evaluate("element => element.scrollIntoView({ block: 'center', behavior: 'instant' })")
                     time.sleep(0.5) 
-                    
-                    # HOVER ROW FIRST (Fixes missing Options button)
                     row.hover()
                     time.sleep(0.5)
 
-                    # 2. TARGET OPTIONS BUTTON (Ellipses)
                     options_btn = row.locator("ytcp-icon-button[aria-label='Options']").first
-                    
-                    # Get coordinates of the ellipses button
                     opt_box = options_btn.bounding_box()
+                    
                     if not opt_box:
-                        print("   [Warning] Options button not visible (bounding box failed). Skipping.")
+                        print("   [Warning] Options button not visible. Skipping.")
                         continue
                         
                     opt_x = opt_box["x"] + opt_box["width"] / 2
                     opt_y = opt_box["y"] + opt_box["height"] / 2
                     
-                    # Physically move to the ellipses
                     self.page.mouse.move(opt_x, opt_y, steps=10)
-                    
-                    # WAIT 1 SECOND (Simulate human looking at the row)
-                    print("   [UI] Hovering Options (Physical Mouse)...")
                     time.sleep(1.0)
-                    
-                    # Click the ellipses (Physical click required for menu to appear cleanly)
                     self.page.mouse.click(opt_x, opt_y)
-                    # -----------------------------------
                     
                     download_info = None
 
                     try:
-                        # 3. LOCATE DOWNLOAD BUTTON
-                        
-                        # A. Wait for the menu dialog to appear
-                        time.sleep(1.0) # Allow animation
+                        time.sleep(1.0)
                         
                         active_dialog = self.page.locator("tp-yt-paper-dialog").filter(
                             has_not=self.page.locator("[style*='display: none']")
@@ -208,46 +242,44 @@ class PlaywrightAnalyzer:
                             has_not=self.page.locator("[style*='display:none']")
                         ).locator("visible=true").first
                         
-                        # B. Find the download link inside that dialog
                         download_link = active_dialog.locator("a[href*='download']").filter(has_text="Download").first
-                        
-                        # C. Standard Playwright Click with Safety
                         download_link.wait_for(state="visible", timeout=5000)
                         
-                        print("   [UI] Clicking Download (Standard)...")
+                        print("   [UI] Clicking Download...")
                         
-                        # --- DOWNLOAD SAFETY BLOCK ---
                         try:
-                            # 5 second timeout for download to start
                             with self.page.expect_download(timeout=5000) as download_info_ctx:
                                 download_link.click()
                             download_info = download_info_ctx.value
 
                         except Exception as e:
                             print(f"   [Error] Download did not start: {e}")
+                            print(f"   [Safety] Marking '{title}' as FAILED. Skipping.")
+                            self._save_failure(title, f"Download timeout/fail: {e}")
+                            failed_titles.add(title)
                             
-                            # SAFETY CHECK: Are we still on Shorts tab?
-                            # Using the user-provided selector logic
+                            self.page.keyboard.press("Escape")
+                            time.sleep(0.5)
+                            
                             shorts_tab = self.page.locator("#video-list-shorts-tab[aria-selected='true']")
-                            
                             if shorts_tab.is_visible():
-                                print("   [Safety] Still on Shorts tab. This video is likely bugged. Skipping.")
-                                # Close the open menu by clicking empty space
                                 self.page.mouse.move(0, 0)
                                 self.page.mouse.click(0, 0)
-                                # Mark as analyzed so we don't loop on it? 
-                                # Optional: analyzed_titles.add(title) if you want to permanently skip it.
-                                # For now, we just skip this iteration.
                                 continue 
                             else:
-                                print("   [Safety] Not on Shorts tab! Context lost. Navigating back...")
+                                print("   [Safety] Context lost. Navigating back...")
                                 navigate_to_shorts(self.page)
-                                # Reset loop to find rows again
                                 break 
                         
                     except Exception as e:
-                        print(f"   [Error] Menu navigation failed: {e}")
-                        # Emergency reset: Move mouse away and click empty space to close menu
+                        print(f"   [Error] Menu/UI navigation failed: {e}")
+                        print(f"   [Safety] Marking '{title}' as FAILED. Skipping.")
+                        self._save_failure(title, f"Menu/UI Error: {e}")
+                        failed_titles.add(title)
+                        
+                        self.page.keyboard.press("Escape")
+                        time.sleep(0.5)
+
                         self.page.mouse.move(0, 0)
                         self.page.mouse.click(0, 0)
                         continue
@@ -256,16 +288,13 @@ class PlaywrightAnalyzer:
                     
                     if download_info:
                         save_path = self.temp_dir / f"{title[:10]}_{int(time.time())}.mp4"
-                        
                         print(f"   [Download] Saving to {save_path}...")
                         download_info.save_as(save_path)
 
-                        # Reset mouse
                         self.page.mouse.move(0, 0)
                         self.page.mouse.click(0, 0)
                         time.sleep(0.5) 
                         
-                        # Analyze
                         result = self.analyze_with_gemini(save_path, title)
                         
                         if "error" not in result:
@@ -285,19 +314,20 @@ class PlaywrightAnalyzer:
                     
                 except Exception as e:
                     print(f"   [Warning] Skipped row due to error: {e}")
+                    self.page.keyboard.press("Escape")
                     self.page.mouse.move(0, 0)
                     self.page.mouse.click(0, 0)
                     continue
             
+            # --- 3. Pagination Logic ---
             if processed_in_pass == 0:
                 print(">> No new drafts found on this page. Checking pagination...")
                 next_btn = self.page.locator("#navigate-after")
+                
                 if next_btn.is_visible() and next_btn.get_attribute("aria-disabled") != "true":
                     next_btn.click()
-                    time.sleep(3)
+                    print(">> Navigating to next page... (Waiting 5s)")
+                    time.sleep(5)
                 else:
                     print(">> Done. All drafts analyzed.")
                     break
-
-
-                
