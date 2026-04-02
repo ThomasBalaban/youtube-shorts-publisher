@@ -2,7 +2,6 @@ import json
 import os
 from datetime import datetime, timedelta, time
 
-# --- NEW: Session Memory ---
 # This set will store slots we have assigned during this specific run of the script.
 # This prevents the bot from picking the same time twice in one batch.
 _session_occupied_slots = set()
@@ -49,9 +48,11 @@ def get_next_schedule_time():
         
         # Define the 3 fixed slots for this target date
         daily_slots = [
+            datetime.combine(target_date, time(10, 0)), # 10:00 AM
             datetime.combine(target_date, time(12, 0)), # 12:00 PM
+            datetime.combine(target_date, time(16, 0)), # 4:00 PM
             datetime.combine(target_date, time(18, 0)), # 6:00 PM
-            datetime.combine(target_date, time(21, 0))  # 9:00 PM
+            datetime.combine(target_date, time(20, 0)), # 8:00 PM
         ]
         
         for slot in daily_slots:
