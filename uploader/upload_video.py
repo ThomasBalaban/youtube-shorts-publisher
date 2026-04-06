@@ -2,63 +2,74 @@
 uploader/upload_video.py
 
 Scans (project_parent)/simpleautosubs/output for video files and uploads
-each one through YouTube Studio — no form filling, no wizard steps.
+them in batches of up to 15 through a single YouTube Studio dialog session.
 
-After attaching the file and waiting for the upload to finish, any open
-dialog is closed and the next file is processed.
+Flow per batch:
+  1. Open Create -> Upload videos dialog
+  2. Attach all files at once
+  3. Wait until all uploads are 100% complete
+  4. Close dialog
+  5. Repeat for next batch automatically
 
-On success: file is deleted from output/.
-On failure: file is moved to output/failed/.
+Files are NOT deleted. Uploaded filenames tracked in uploader/uploaded_files.json.
 """
 
+import json
 import os
 import time
 from pathlib import Path
 from playwright.sync_api import Page
 
 from config.navigation import navigate_to_shorts
-from publisher.close_draft import close_dialog
+from uploader.check_unuploaded import run_audit
 
 # ---------------------------------------------------------------------------
-# Output directory — (parent of this project) / simpleautosubs / output
+# Paths
 # ---------------------------------------------------------------------------
 _THIS_FILE     = Path(os.path.abspath(__file__))
 _PROJECT_DIR   = _THIS_FILE.parent.parent
 _SHARED_PARENT = _PROJECT_DIR.parent
 OUTPUT_DIR     = _SHARED_PARENT / "simpleautosubs" / "output"
+UPLOADED_LOG   = _PROJECT_DIR / "uploader" / "uploaded_files.json"
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+BATCH_SIZE = 15
+
+
+# ---------------------------------------------------------------------------
+# Upload log helpers
+# ---------------------------------------------------------------------------
+
+def _load_uploaded_log() -> set:
+    if UPLOADED_LOG.exists():
+        try:
+            with open(UPLOADED_LOG, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+
+def _save_uploaded_log(uploaded: set) -> None:
+    try:
+        with open(UPLOADED_LOG, "w") as f:
+            json.dump(sorted(uploaded), f, indent=2)
+    except Exception as e:
+        print(f"[Uploader] Warning: Could not save uploaded log: {e}")
 
 
 # ---------------------------------------------------------------------------
 # Directory helpers
 # ---------------------------------------------------------------------------
 
-def _get_pending_videos() -> list[Path]:
+def _get_pending_videos(uploaded: set) -> list[Path]:
     if not OUTPUT_DIR.exists():
         return []
     return [
         f for f in sorted(OUTPUT_DIR.iterdir())
         if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS
+        and f.name not in uploaded
     ]
-
-
-def _mark_success(video_path: Path) -> None:
-    try:
-        video_path.unlink()
-        print(f"[Uploader] Deleted: {video_path.name}")
-    except Exception as e:
-        print(f"[Uploader] Warning: Could not delete {video_path.name}: {e}")
-
-
-def _mark_failed(video_path: Path) -> None:
-    failed_dir = OUTPUT_DIR / "failed"
-    failed_dir.mkdir(exist_ok=True)
-    try:
-        video_path.rename(failed_dir / video_path.name)
-        print(f"[Uploader] Moved to failed/: {video_path.name}")
-    except Exception as e:
-        print(f"[Uploader] Warning: Could not move {video_path.name}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -113,71 +124,61 @@ def _click_upload_videos_option(page: Page) -> bool:
     return False
 
 
-def _attach_file(page: Page, video_path: Path) -> bool:
-    print(f"[Uploader] Attaching: {video_path.name}")
+def _attach_files(page: Page, video_paths: list[Path]) -> bool:
+    print(f"[Uploader] Attaching {len(video_paths)} file(s) at once...")
     try:
         file_input = page.locator("input[type='file']").first
         file_input.wait_for(state="attached", timeout=15000)
-        file_input.set_input_files(str(video_path))
-        print("[Uploader] File attached. Upload starting...")
+        file_input.set_input_files([str(p) for p in video_paths])
+        print("[Uploader] All files attached. Uploads starting...")
         return True
     except Exception as e:
-        print(f"[Uploader] ERROR attaching file: {e}")
+        print(f"[Uploader] ERROR attaching files: {e}")
         return False
 
 
-def _wait_for_upload_complete(page: Page, timeout_minutes: int = 10) -> bool:
-    """Polls the progress bar until upload finishes or times out."""
-    print("[Uploader] Waiting for upload to complete...")
+def _wait_for_all_uploads(page: Page, count: int, timeout_minutes: int = 30) -> bool:
+    """
+    Waits until all files in the current batch are fully uploaded.
+    TODO: Replace the selector below with the confirmed one once provided.
+    
+    Currently polling for the upload progress header to disappear
+    (e.g. "Uploading X of 15" -> gone when all done).
+    """
+    print(f"[Uploader] Waiting for all {count} uploads to complete...")
     timeout_ms = timeout_minutes * 60 * 1000
-    poll_interval = 3000
+    poll_ms = 3000
     elapsed = 0
 
-    # Wait for the upload dialog to open at all
-    try:
-        page.wait_for_selector("ytcp-uploads-dialog", state="visible", timeout=30000)
-        print("[Uploader] Upload dialog open.")
-    except Exception:
-        print("[Uploader] Warning: Upload dialog slow to appear.")
+    COMPLETE_SELECTOR = "ytcp-multi-progress-monitor span.count:has-text('Uploads complete')"
 
     while elapsed < timeout_ms:
         try:
-            progress_bar = page.locator("ytcp-video-upload-progress")
-            if progress_bar.count() > 0:
-                progress_text = progress_bar.inner_text()
-                print(f"[Uploader]   Progress: {progress_text.strip()[:60]}")
-                if any(kw in progress_text for kw in ["Upload complete", "Checks complete", "Video uploaded"]):
-                    print("[Uploader] Upload complete!")
-                    return True
-            else:
-                print("[Uploader] Progress indicator gone. Upload likely complete.")
+            if page.locator(COMPLETE_SELECTOR).is_visible():
+                print("[Uploader] All uploads complete!")
                 return True
+            status = page.locator("ytcp-multi-progress-monitor span.count").first
+            if status.count() > 0:
+                print(f"[Uploader]   Status: {status.inner_text().strip()}")
         except Exception:
-            return True
+            pass
 
-        page.wait_for_timeout(poll_interval)
-        elapsed += poll_interval
+        page.wait_for_timeout(poll_ms)
+        elapsed += poll_ms
 
-    print(f"[Uploader] ERROR: Upload did not finish within {timeout_minutes} minutes.")
+    print(f"[Uploader] ERROR: Uploads did not finish within {timeout_minutes} minutes.")
     return False
 
 
-# ---------------------------------------------------------------------------
-# Single video orchestrator
-# ---------------------------------------------------------------------------
-
-def upload_one_video(page: Page, video_path: Path) -> bool:
-    print(f"\n[Uploader] ── Uploading: '{video_path.name}' ──")
-
-    if not _click_create_button(page):        return False
-    time.sleep(1)
-    if not _click_upload_videos_option(page): return False
-    time.sleep(1)
-    if not _attach_file(page, video_path):    return False
-    close_dialog(page)
-
-    print(f"[Uploader] ✓ Done: '{video_path.name}'")
-    return True
+def _close_dialog(page: Page) -> None:
+    print("[Uploader] Closing dialog...")
+    try:
+        close_btn = page.locator("ytcp-multi-progress-monitor #close-button").first
+        close_btn.wait_for(state="visible", timeout=10000)
+        close_btn.click()
+        print("[Uploader] Dialog closed.")
+    except Exception as e:
+        print(f"[Uploader] Warning: Could not close dialog: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -194,35 +195,52 @@ def run_uploader(page: Page) -> None:
         print(f"[Uploader] Output directory does not exist: {OUTPUT_DIR}")
         return
 
-    videos = _get_pending_videos()
+    uploaded = _load_uploaded_log()
+    print(f"[Uploader] {len(uploaded)} file(s) already uploaded (skipping).")
 
-    if not videos:
-        print("[Uploader] No video files found.")
+    all_pending = _get_pending_videos(uploaded)
+
+    if not all_pending:
+        print("[Uploader] No new video files found.")
+        run_audit()
         return
 
+    # Apply optional hard cap from settings
     if UPLOAD_LIMIT and UPLOAD_LIMIT > 0:
-        if len(videos) > UPLOAD_LIMIT:
-            print(f"[Uploader] UPLOAD_LIMIT={UPLOAD_LIMIT}: capping at {UPLOAD_LIMIT} of {len(videos)} file(s).")
-            videos = videos[:UPLOAD_LIMIT]
+        all_pending = all_pending[:UPLOAD_LIMIT]
 
-    print(f"[Uploader] Uploading {len(videos)} file(s).")
+    total = len(all_pending)
+    print(f"[Uploader] {total} file(s) to upload across batches of {BATCH_SIZE}.")
 
-    for i, video_path in enumerate(videos, 1):
-        print(f"\n[Uploader] ── File {i}/{len(videos)}: {video_path.name} ──")
+    # Split into batches
+    batches = [all_pending[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
+
+    for batch_num, batch in enumerate(batches, 1):
+        print(f"\n[Uploader] ── Batch {batch_num}/{len(batches)} ({len(batch)} file(s)) ──")
+        for v in batch:
+            print(f"   - {v.name}")
 
         if not navigate_to_shorts(page):
             print("[Uploader] CRITICAL: Navigation failed. Aborting.")
             break
 
-        success = upload_one_video(page, video_path)
+        if not _click_create_button(page):        break
+        time.sleep(1)
+        if not _click_upload_videos_option(page): break
+        time.sleep(1)
+        if not _attach_files(page, batch):        break
 
-        if success:
-            _mark_success(video_path)
-        else:
-            _mark_failed(video_path)
+        _wait_for_all_uploads(page, len(batch))
+        _close_dialog(page)
 
-        if i < len(videos):
-            print("[Uploader] Waiting 5s before next upload...")
+        # Log the batch
+        for v in batch:
+            uploaded.add(v.name)
+        _save_uploaded_log(uploaded)
+        print(f"[Uploader] Batch {batch_num} logged.")
+
+        if batch_num < len(batches):
+            print("[Uploader] Waiting 5s before next batch...")
             time.sleep(5)
 
     print("\n[Uploader] All done.")
