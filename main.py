@@ -4,48 +4,59 @@ from playwright.sync_api import sync_playwright
 from config.navigation import navigate_to_shorts
 from config.scraper import VideoScraper
 from publisher.publisher import run_publisher
-from analyzer.playwright_analyzer import PlaywrightAnalyzer  # <--- New Import
-from settings import PROCESS_SINGLE_VIDEO, ENABLE_SCRAPING_MODE, ENABLE_ANALYSIS_MODE # <--- Updated Import
+from uploader.upload_video import run_uploader          # <--- uploader/ package
+from analyzer.playwright_analyzer import PlaywrightAnalyzer
+from settings import (
+    PROCESS_SINGLE_VIDEO,
+    ENABLE_SCRAPING_MODE,
+    ENABLE_ANALYSIS_MODE,
+    ENABLE_UPLOAD_MODE,
+)
 
 def run():
     user_data_dir = os.path.join(os.getcwd(), "user_data")
 
     with sync_playwright() as p:
         print(f"Launching browser with profile at: {user_data_dir}")
-        
+
         context = p.chromium.launch_persistent_context(
-            user_data_dir, 
+            user_data_dir,
             headless=False,
-            channel="chrome", 
+            channel="chrome",
             args=["--disable-blink-features=AutomationControlled"]
         )
-        
+
         page = context.pages[0]
-        
+
         print("Navigating to YouTube Studio...")
         page.goto("https://studio.youtube.com/")
-        
+
         if navigate_to_shorts(page):
-            
-            # --- BRANCHING LOGIC ---
-            if ENABLE_ANALYSIS_MODE:     # <--- New Branch for Analyzer
+
+            if ENABLE_UPLOAD_MODE:
+                print("\n=== MODE: UPLOADER ===")
+                run_uploader(page)
+
+            elif ENABLE_ANALYSIS_MODE:
+                # ── Analysis mode ──────────────────────────────────────────
                 print("\n=== MODE: ANALYZER (Download & AI) ===")
                 analyzer = PlaywrightAnalyzer(page)
                 analyzer.run()
 
             elif ENABLE_SCRAPING_MODE:
+                # ── Scrape mode ────────────────────────────────────────────
                 print("\n=== MODE: SCRAPER ===")
                 scraper = VideoScraper(page)
                 scraper.scrape_all()
-                
+
             elif PROCESS_SINGLE_VIDEO:
-                # --- MODE: PUBLISHER (LOOPS INTERNALLY) ---
+                # ── Publisher mode ─────────────────────────────────────────
                 print("\n=== MODE: PUBLISHER ===")
                 run_publisher(page)
-                
+
             else:
                 print("No action selected in settings.py")
-            
+
         else:
             print("Could not navigate to Shorts. Aborting.")
 
@@ -56,6 +67,7 @@ def run():
                 page.wait_for_timeout(1000)
         except KeyboardInterrupt:
             print("Stopping...")
+
 
 if __name__ == "__main__":
     run()
