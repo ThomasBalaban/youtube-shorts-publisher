@@ -4,7 +4,7 @@ from playwright.sync_api import sync_playwright
 from config.navigation import navigate_to_shorts
 from config.scraper import VideoScraper
 from publisher.publisher import run_publisher
-from uploader.upload_video import run_uploader          # <--- uploader/ package
+from uploader.upload_video import run_uploader
 from analyzer.playwright_analyzer import PlaywrightAnalyzer
 from settings import (
     PROCESS_SINGLE_VIDEO,
