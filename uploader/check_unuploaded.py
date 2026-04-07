@@ -4,10 +4,18 @@ uploader/check_unuploaded.py
 Audits the simpleautosubs output folder against uploaded_files.json.
 Run this if the uploader reports nothing to upload but you suspect
 files are still sitting in the output folder.
+
+If ALL files in the output folder are already uploaded (not_yet_uploaded == 0),
+every video file is moved to the macOS Trash automatically.
 """
 
 import json
 from pathlib import Path
+
+try:
+    from send2trash import send2trash
+except ImportError:
+    send2trash = None
 
 # ---------------------------------------------------------------------------
 # Paths (mirrors upload_video.py)
@@ -40,6 +48,31 @@ def get_output_videos() -> list[Path]:
     ]
 
 
+def _trash_all_videos(videos: list[Path]) -> None:
+    """Move every file in the list to the macOS Trash."""
+    if send2trash is None:
+        print(
+            "[Audit] 'send2trash' is not installed — cannot move files to Trash.\n"
+            "        Run:  pip install send2trash"
+        )
+        return
+
+    print(f"\n[Audit] Moving {len(videos)} file(s) to Trash...")
+    failed = []
+    for v in videos:
+        try:
+            send2trash(str(v))
+            print(f"  🗑  {v.name}")
+        except Exception as e:
+            print(f"  ✗  {v.name}  ({e})")
+            failed.append(v)
+
+    if failed:
+        print(f"\n[Audit] Warning: {len(failed)} file(s) could not be trashed.")
+    else:
+        print("[Audit] All files moved to Trash successfully.")
+
+
 def run_audit():
     print(f"\n=== UPLOAD AUDIT ===")
     print(f"Output folder : {OUTPUT_DIR}")
@@ -64,9 +97,10 @@ def run_audit():
         for v in not_uploaded:
             print(f"  ✗  {v.name}")
     else:
-        print("\n[Audit] All files in output folder are already logged as uploaded.")
+        print("[Audit] All files in output folder are already logged as uploaded.")
+        _trash_all_videos(already_done)
 
-    if already_done:
+    if already_done and not_uploaded:
         print("\n── Files already uploaded ──")
         for v in already_done:
             print(f"  ✓  {v.name}")
