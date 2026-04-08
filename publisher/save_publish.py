@@ -1,19 +1,8 @@
 from playwright.sync_api import Page
 import time
-from settings import TEST_MODE
 
 def click_save(page: Page):
     print("\n--- Step 8: Save / Publish ---")
-    
-    # --- TEST MODE CHECK ---
-    if TEST_MODE:
-        print("\n**************************************************")
-        print(">> TEST MODE ENABLED: Skipping 'Save' button click.")
-        print(">> The video will remain a draft so you can verify changes.")
-        print("**************************************************\n")
-        return True
-    # ---------------------------
-
     print(">> Looking for 'Save' button...")
 
     try:
