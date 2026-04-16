@@ -7,9 +7,11 @@ them in batches of up to 15 through a single YouTube Studio dialog session.
 Flow per batch:
   1. Open Create -> Upload videos dialog
   2. Attach all files at once
-  3. Wait until all uploads are 100% complete
-  4. Close dialog
-  5. Repeat for next batch automatically
+  3. Wait 5 seconds, then click the dialog close button
+     (handles both single-video and multi-video upload screens)
+  4. Wait up to 3 minutes for YouTube to finish processing in the background
+  5. Hard-cap: if the batch hasn't finished within 10 minutes, force-close and move on
+  6. Repeat for next batch automatically
 
 Files are NOT deleted. Uploaded filenames tracked in uploader/uploaded_files.json.
 """
@@ -34,6 +36,13 @@ UPLOADED_LOG   = _PROJECT_DIR / "uploader" / "uploaded_files.json"
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 BATCH_SIZE = 15
+
+# ---------------------------------------------------------------------------
+# Timing constants
+# ---------------------------------------------------------------------------
+POST_ATTACH_WAIT_S   = 5     # seconds to wait after attaching before closing dialog
+POST_CLOSE_WAIT_S    = 180   # 3 minutes — let YouTube process uploads in background
+BATCH_HARD_CAP_S     = 600   # 10 minutes — absolute ceiling per batch
 
 
 # ---------------------------------------------------------------------------
@@ -137,48 +146,45 @@ def _attach_files(page: Page, video_paths: list[Path]) -> bool:
         return False
 
 
-def _wait_for_all_uploads(page: Page, count: int, timeout_minutes: int = 30) -> bool:
+def _close_upload_dialog(page: Page) -> bool:
     """
-    Waits until all files in the current batch are fully uploaded.
-    TODO: Replace the selector below with the confirmed one once provided.
-    
-    Currently polling for the upload progress header to disappear
-    (e.g. "Uploading X of 15" -> gone when all done).
+    Clicks the dialog close button that works for both single-video and
+    multi-video upload screens. Called ~5 seconds after attaching files.
+    YouTube continues uploading in the background after this is dismissed.
     """
-    print(f"[Uploader] Waiting for all {count} uploads to complete...")
-    timeout_ms = timeout_minutes * 60 * 1000
-    poll_ms = 3000
-    elapsed = 0
+    print("[Uploader] Closing upload dialog (background upload continues)...")
 
-    COMPLETE_SELECTOR = "ytcp-multi-progress-monitor span.count:has-text('Uploads complete')"
+    close_selectors = [
+        "#ytcp-uploads-dialog-close-button",
+        "ytcp-uploads-dialog #close-button",
+        "ytcp-icon-button[aria-label='Close']",
+    ]
 
-    while elapsed < timeout_ms:
+    for selector in close_selectors:
         try:
-            if page.locator(COMPLETE_SELECTOR).is_visible():
-                print("[Uploader] All uploads complete!")
+            btn = page.locator(selector).first
+            if btn.is_visible(timeout=3000):
+                btn.click()
+                print(f"[Uploader] Dialog closed via: {selector}")
                 return True
-            status = page.locator("ytcp-multi-progress-monitor span.count").first
-            if status.count() > 0:
-                print(f"[Uploader]   Status: {status.inner_text().strip()}")
         except Exception:
-            pass
+            continue
 
-        page.wait_for_timeout(poll_ms)
-        elapsed += poll_ms
-
-    print(f"[Uploader] ERROR: Uploads did not finish within {timeout_minutes} minutes.")
+    print("[Uploader] Warning: Could not find dialog close button — upload may still be running.")
     return False
 
 
-def _close_dialog(page: Page) -> None:
-    print("[Uploader] Closing dialog...")
-    try:
-        close_btn = page.locator("ytcp-multi-progress-monitor #close-button").first
-        close_btn.wait_for(state="visible", timeout=10000)
-        close_btn.click()
-        print("[Uploader] Dialog closed.")
-    except Exception as e:
-        print(f"[Uploader] Warning: Could not close dialog: {e}")
+def _wait_with_progress(label: str, total_seconds: int, page: Page) -> None:
+    """Waits total_seconds, printing progress every 30 seconds."""
+    print(f"[Uploader] {label} — waiting {total_seconds // 60}m {total_seconds % 60}s...")
+    elapsed = 0
+    while elapsed < total_seconds:
+        chunk = min(30, total_seconds - elapsed)
+        page.wait_for_timeout(chunk * 1000)
+        elapsed += chunk
+        remaining = total_seconds - elapsed
+        if remaining > 0:
+            print(f"[Uploader]   {elapsed}s elapsed, {remaining}s remaining...")
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +199,7 @@ def run_uploader(page: Page) -> None:
 
     if not OUTPUT_DIR.exists():
         print(f"[Uploader] Output directory does not exist: {OUTPUT_DIR}")
+        print("[Uploader] All done.")
         return
 
     uploaded = _load_uploaded_log()
@@ -203,6 +210,7 @@ def run_uploader(page: Page) -> None:
     if not all_pending:
         print("[Uploader] No new video files found.")
         run_audit()
+        print("[Uploader] All done.")
         return
 
     # Apply optional hard cap from settings
@@ -216,6 +224,7 @@ def run_uploader(page: Page) -> None:
     batches = [all_pending[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
 
     for batch_num, batch in enumerate(batches, 1):
+        batch_start = time.time()
         print(f"\n[Uploader] ── Batch {batch_num}/{len(batches)} ({len(batch)} file(s)) ──")
         for v in batch:
             print(f"   - {v.name}")
@@ -224,20 +233,44 @@ def run_uploader(page: Page) -> None:
             print("[Uploader] CRITICAL: Navigation failed. Aborting.")
             break
 
-        if not _click_create_button(page):        break
+        if not _click_create_button(page):
+            break
         time.sleep(1)
-        if not _click_upload_videos_option(page): break
+
+        if not _click_upload_videos_option(page):
+            break
         time.sleep(1)
-        if not _attach_files(page, batch):        break
 
-        _wait_for_all_uploads(page, len(batch))
-        _close_dialog(page)
+        if not _attach_files(page, batch):
+            break
 
-        # Log the batch
+        # ── Wait 5s then close the dialog ────────────────────────────────────
+        print(f"[Uploader] Waiting {POST_ATTACH_WAIT_S}s before closing dialog...")
+        page.wait_for_timeout(POST_ATTACH_WAIT_S * 1000)
+        _close_upload_dialog(page)
+
+        # ── Wait for YouTube to process uploads in the background ─────────────
+        # Cap at either POST_CLOSE_WAIT_S (3 min) or remaining hard-cap time.
+        elapsed_so_far = int(time.time() - batch_start)
+        budget = max(0, BATCH_HARD_CAP_S - elapsed_so_far)
+        wait_time = min(POST_CLOSE_WAIT_S, budget)
+
+        if wait_time > 0:
+            _wait_with_progress(
+                f"Batch {batch_num} background processing",
+                wait_time,
+                page,
+            )
+        else:
+            print(f"[Uploader] Hard cap reached for batch {batch_num} — moving on.")
+
+        # ── Log the batch ─────────────────────────────────────────────────────
         for v in batch:
             uploaded.add(v.name)
         _save_uploaded_log(uploaded)
-        print(f"[Uploader] Batch {batch_num} logged.")
+
+        batch_elapsed = int(time.time() - batch_start)
+        print(f"[Uploader] Batch {batch_num} logged. ({batch_elapsed}s total)")
 
         if batch_num < len(batches):
             print("[Uploader] Waiting 5s before next batch...")
