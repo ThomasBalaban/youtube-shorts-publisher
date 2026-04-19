@@ -32,3 +32,17 @@ ENABLE_UPLOAD_MODE      = _cfg.get("ENABLE_UPLOAD_MODE",      True)
 UPLOAD_LIMIT            = _cfg.get("UPLOAD_LIMIT",            0)
 VIDEOS_TO_PROCESS_COUNT = _cfg.get("VIDEOS_TO_PROCESS_COUNT", 100)
 GEMINI_API_KEY          = GEMJAM
+
+# -----------------------------------------------------------------------------
+# Gemini model selection per analysis pass
+# -----------------------------------------------------------------------------
+# Pass 1 (observe):  watches the video. Reasoning-heavy, uses Pro.
+# Pass 1.5 (critique): rewrites Pass 1 notes for sharpness. Reasoning-heavy, uses Pro.
+# Pass 2 (metadata): structured JSON output from refined notes. Uses Flash.
+#
+# All three are preview models and can be deprecated with ~2 weeks notice.
+# Stable fallback: 'models/gemini-2.5-pro' and 'models/gemini-2.5-flash'.
+# -----------------------------------------------------------------------------
+GEMINI_MODEL_OBSERVE  = 'models/gemini-3.1-pro-preview'
+GEMINI_MODEL_CRITIQUE = 'models/gemini-3.1-pro-preview'
+GEMINI_MODEL_METADATA = 'models/gemini-3-flash-preview'
