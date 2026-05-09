@@ -40,7 +40,17 @@ except ImportError as e:
     sys.exit(1)
 
 # Configuration
-CLIENT_SECRETS_FILE = "client_secret.json"
+import sys as _sys
+_HUB_CONFIG = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "youtube_hub", "config"))
+if _HUB_CONFIG not in _sys.path:
+    _sys.path.insert(0, _HUB_CONFIG)
+from shared_secrets import (
+    get_oauth_client_secrets_path as _get_client_secrets_path,
+    get_oauth_token_path as _get_token_path,
+)
+CLIENT_SECRETS_FILE = str(_get_client_secrets_path())
 COOKIES_FILE = "cookies.txt"
 SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"]
 
@@ -177,7 +187,7 @@ class DraftShortsAnalyzer:
 
     def _authenticate_youtube(self):
         creds = None
-        token_path = 'token.json'
+        token_path = str(_get_token_path("youtube_readonly"))
         if os.path.exists(token_path):
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
         if not creds or not creds.valid:
