@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import anthropic; print\\('anthropic version:', anthropic.__version__\\)\")",
+      "Bash(conda run *)",
+      "Bash(curl -s http://localhost:9022/logs?last=400)",
+      "Bash(curl -s \"http://localhost:9022/logs?last=400\")",
+      "Bash(curl -s \"http://localhost:9022/thinker/status\")",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s \"http://localhost:9022/recommendations/metadata\")",
+      "Bash(curl -sv -X POST \"http://localhost:9022/thinker/force\" -H \"Content-Type: application/json\" -d '{\"task_type\":\"pre_publish_metadata\"}')"
+    ],
+    "additionalDirectories": [
+      "/Users/thomasbalaban/Downloads/projects/youtube-automator/shorts_strategist/strategist/tasks",
+      "/Users/thomasbalaban/Downloads/projects/youtube-automator/shorts_strategist/strategist",
+      "/Users/thomasbalaban/Downloads/projects/youtube-automator/youtube_hub/src/app/components/strategist-page"
+    ]
+  }
+}
