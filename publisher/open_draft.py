@@ -1,100 +1,70 @@
-from playwright.sync_api import Page
+"""Scan YT Studio's draft list, open the first row whose title is in
+``allowed_titles`` (and isn't in ``ignore_titles``). Returns the visible
+draft title that was opened, or None if nothing matched on any page."""
 import time
+from typing import Iterable, Optional, Set
+from playwright.sync_api import Page
 
-def open_first_draft(page: Page, analysis_data: list, ignore_titles: list = None):
+
+def open_first_draft(
+    page: Page,
+    allowed_titles: Iterable[str],
+    ignore_titles: Optional[Iterable[str]] = None,
+) -> Optional[str]:
     print("\n--- Step 1: Open First Draft ---")
-    
-    if ignore_titles is None:
-        ignore_titles = []
-        
-    # --- BUILD LOOKUP MAP ---
-    # Maps { Visible Title -> Original Title Key }
-    title_map = {}
-    for item in analysis_data:
-        original_title = item.get("title")
-        if original_title:
-            title_map[original_title] = original_title
-            
-            new_title = item.get("new_title")
-            if new_title:
-                title_map[new_title] = original_title
-    
-    print(f"Scanning for {len(title_map)} potential title matches (Ignoring {len(ignore_titles)})...")
+
+    allowed: Set[str] = set(allowed_titles)
+    ignored: Set[str] = set(ignore_titles or [])
+
+    print(f"Scanning for {len(allowed)} eligible draft titles "
+          f"(ignoring {len(ignored)})...")
 
     page_count = 1
-
-    # --- PAGINATION LOOP ---
     while True:
         print(f">> Scanning Page {page_count}...")
 
-        # Wait for rows to load
         try:
             page.wait_for_selector("ytcp-video-row", state="visible", timeout=5000)
-        except:
+        except Exception:
             print("   [Info] No video rows detected on this page.")
 
-        # Get all rows on current page
         rows = page.locator("ytcp-video-row").all()
 
-        # --- ROW SCANNING ---
         for row in rows:
             try:
-                # Check if it's a draft
-                # (We check text content safely to avoid stale element errors)
                 row_text = row.inner_text()
-                
-                # We check for 'Draft' in the row text.
-                # Note: If you have already filtered by "Visibility: Draft", this is redundant but safe.
-                if "Draft" in row_text:
-                    title_link = row.locator("#video-title").first
-                    
-                    if title_link.is_visible():
-                        visible_title = title_link.inner_text().strip()
-                        
-                        # --- FIX: REMOVED BACKTRACK FILTER ---
-                        # Previously, the bot would skip any title containing "Backtrack".
-                        # Since your current drafts are named "Backtrack...", we must allow them.
-                        
-                        # Check for Match in our Map
-                        if visible_title in title_map:
-                            original_key = title_map[visible_title]
-                            
-                            # Check Ignore List
-                            if original_key in ignore_titles:
-                                continue
+                if "Draft" not in row_text:
+                    continue
 
-                            print(f">> Found Match: '{visible_title}'")
-                            if visible_title != original_key:
-                                 print(f"   (Mapped to original analysis key: '{original_key}')")
-                                 
-                            print(">> Opening Draft...")
-                            title_link.click()
-                            
-                            return original_key
-                        else:
-                            # Optional debug print to help you see what it found but rejected
-                            # print(f"   [Debug] Ignored non-matching title: '{visible_title}'")
-                            pass
+                title_link = row.locator("#video-title").first
+                if not title_link.is_visible():
+                    continue
 
-            except Exception as e:
-                # Stale element or UI update during scan
+                visible_title = title_link.inner_text().strip()
+
+                if visible_title in ignored:
+                    continue
+                if visible_title not in allowed:
+                    continue
+
+                print(f">> Found Match: '{visible_title}'")
+                print(">> Opening Draft...")
+                title_link.click()
+                return visible_title
+
+            except Exception:
+                # Stale element / UI re-render during scan
                 continue
-        
-        # --- PAGINATION LOGIC ---
+
         print(f"   [Info] No match found on Page {page_count}.")
-        
-        # Look for the 'Next Page' button
+
         next_button = page.locator("#navigate-after")
-        
-        # Check if button exists and is actionable (not disabled)
         if not next_button.is_visible() or next_button.get_attribute("aria-disabled") == "true":
             print(">> End of list reached. No matching drafts found.")
             break
-        
+
         print(">> Navigating to next page...")
         next_button.click()
-        
-        # Wait for the table to refresh
         time.sleep(3)
         page_count += 1
 

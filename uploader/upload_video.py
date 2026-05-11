@@ -1,7 +1,7 @@
 """
 uploader/upload_video.py
 
-Scans (project_parent)/simpleautosubs/output for video files and uploads
+Scans (project_parent)/shorts-auto-editor/output for video files and uploads
 them in batches of up to 15 through a single YouTube Studio dialog session.
 
 Flow per batch:
@@ -31,7 +31,7 @@ from uploader.check_unuploaded import run_audit
 _THIS_FILE     = Path(os.path.abspath(__file__))
 _PROJECT_DIR   = _THIS_FILE.parent.parent
 _SHARED_PARENT = _PROJECT_DIR.parent
-OUTPUT_DIR     = _SHARED_PARENT / "simpleautosubs" / "output"
+OUTPUT_DIR     = _SHARED_PARENT / "shorts-auto-editor" / "output"
 UPLOADED_LOG   = _PROJECT_DIR / "uploader" / "uploaded_files.json"
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}

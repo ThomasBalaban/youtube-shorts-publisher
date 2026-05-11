@@ -1,11 +1,11 @@
 import time
-import json
-import os
+from typing import List
 from playwright.sync_api import Page
+
 from settings import VIDEOS_TO_PROCESS_COUNT
 from config.navigation import navigate_to_shorts
 
-# Import steps
+from publisher.strategist_client import StrategistClient
 from publisher.open_draft import open_first_draft
 from publisher.edit_title import update_title
 from publisher.edit_description import update_description
@@ -18,49 +18,44 @@ from publisher.checks import handle_checks
 from publisher.visibility import handle_visibility
 from publisher.save_publish import click_save
 
-def load_analysis_data():
-    path = "draft_analysis.json"
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Warning: Could not load {path}: {e}")
-    return []
 
-def process_one_video(page: Page, analysis_data: list, ignored_titles: list):
+def process_one_video(
+    page: Page,
+    client: StrategistClient,
+    allowed_titles: set,
+    ignored_titles: List[str],
+) -> str:
     """
     Returns:
-    - "SUCCESS": Video processed.
-    - "NO_DRAFTS": No matching drafts found.
-    - "ERROR": Technical error.
+      "SUCCESS"    — video processed
+      "NO_DRAFTS"  — no matching draft on any page
+      "ERROR"      — technical failure
     """
-    current_title = open_first_draft(page, analysis_data, ignored_titles)
-
+    current_title = open_first_draft(page, allowed_titles, ignored_titles)
     if not current_title:
         return "NO_DRAFTS"
 
-    video_data = next((item for item in analysis_data if item.get("title") == current_title), None)
-
-    if not video_data:
-        print(f"Error: Logic mismatch. Opened '{current_title}' but data missing.")
+    meta = client.lookup_by_draft_title(current_title)
+    if not meta:
+        print(f"Error: opened '{current_title}' but no strategist match.")
         ignored_titles.append(current_title)
         return "ERROR"
 
-    print(f">> Processing found match: '{current_title}'...")
+    print(f">> Processing draft: '{current_title}'")
+    print(f"   → base_key:  {meta.base_key}")
+    print(f"   → title:     {meta.title!r}  (source: {meta.title_source})")
 
-    new_title = video_data.get("new_title")
-    if new_title:
-        if not update_title(page, new_title): return "ERROR"
+    if meta.title:
+        if not update_title(page, meta.title):
+            return "ERROR"
 
-    description = video_data.get("youtube_description", "")
-    hashtags = video_data.get("hashtags", [])
-    if not update_description(page, description, hashtags): return "ERROR"
+    if not update_description(page, meta.description or "", meta.hashtags):
+        return "ERROR"
 
-    tags = video_data.get("tags", "")
-    update_tags(page, tags)
+    update_tags(page, meta.tags or "")
 
-    if not uncheck_notify_subscribers(page): return "ERROR"
+    if not uncheck_notify_subscribers(page):
+        return "ERROR"
 
     print(">> Moving to Ad Suitability tab...")
     if not click_next(page): return "ERROR"
@@ -87,26 +82,28 @@ def process_one_video(page: Page, analysis_data: list, ignored_titles: list):
     print(">> Video processed successfully.")
     return "SUCCESS"
 
-def run_publisher(page: Page):
-    analysis_data = load_analysis_data()
-    print(f"Loaded {len(analysis_data)} analysis entries.")
+
+def run_publisher(page: Page) -> None:
+    client = StrategistClient()
+    allowed_titles = set(client.known_draft_titles())
+    print(f"Loaded {len(allowed_titles)} eligible draft titles from strategist.")
 
     target_count = VIDEOS_TO_PROCESS_COUNT
     print(f"\n=== STARTING PUBLISHER: {target_count} Videos ===")
 
     videos_processed = 0
-    ignored_titles = []
+    ignored_titles: List[str] = []
 
     while videos_processed < target_count:
-        print(f"\n--------------------------------------------------")
+        print(f"\n{'-' * 50}")
         print(f"ATTEMPTING NEXT VIDEO (Processed: {videos_processed}/{target_count})")
-        print(f"--------------------------------------------------")
+        print(f"{'-' * 50}")
 
         if not navigate_to_shorts(page):
             print("CRITICAL: Navigation failed. Aborting.")
             break
 
-        status = process_one_video(page, analysis_data, ignored_titles)
+        status = process_one_video(page, client, allowed_titles, ignored_titles)
 
         if status == "SUCCESS":
             videos_processed += 1

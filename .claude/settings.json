@@ -9,12 +9,16 @@
       "Bash(curl -s \"http://localhost:9022/thinker/status\")",
       "Bash(python -m json.tool)",
       "Bash(curl -s \"http://localhost:9022/recommendations/metadata\")",
-      "Bash(curl -sv -X POST \"http://localhost:9022/thinker/force\" -H \"Content-Type: application/json\" -d '{\"task_type\":\"pre_publish_metadata\"}')"
+      "Bash(curl -sv -X POST \"http://localhost:9022/thinker/force\" -H \"Content-Type: application/json\" -d '{\"task_type\":\"pre_publish_metadata\"}')",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'count: {len\\(d\\)}'\\); print\\('sample:'\\); print\\(json.dumps\\(d[:3], indent=2, ensure_ascii=False\\)[:1500]\\)\")",
+      "Bash(python -u uploader/check_unuploaded.py)",
+      "Bash(python -c \"import send2trash; print\\('send2trash version:', send2trash.__version__ if hasattr\\(send2trash, '__version__'\\) else 'installed'\\)\")"
     ],
     "additionalDirectories": [
       "/Users/thomasbalaban/Downloads/projects/youtube-automator/shorts_strategist/strategist/tasks",
       "/Users/thomasbalaban/Downloads/projects/youtube-automator/shorts_strategist/strategist",
-      "/Users/thomasbalaban/Downloads/projects/youtube-automator/youtube_hub/src/app/components/strategist-page"
+      "/Users/thomasbalaban/Downloads/projects/youtube-automator/youtube_hub/src/app/components/strategist-page",
+      "/Users/thomasbalaban/Downloads/projects/youtube-automator/youtube_hub/src/app/components/publisher-page"
     ]
   }
 }
