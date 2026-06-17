@@ -6,9 +6,11 @@ def update_title(page: Page, new_title: str):
     print(f">> Changing title to: '{new_title}'")
     
     try:
-        # Wait for the title container
+        # Wait for the title container. 30s (was 10s): YouTube Studio can be
+        # slow to render the edit dialog on a cold draft, and a too-short wait
+        # was the most common single point of failure.
         container = page.locator("#title-textarea")
-        container.wait_for(state="visible", timeout=10000)
+        container.wait_for(state="visible", timeout=30000)
         
         # Locate the editable textbox inside
         title_box = container.locator("#textbox").first
